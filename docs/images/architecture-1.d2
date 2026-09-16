@@ -1,0 +1,37 @@
+vars: {
+  d2-config: {
+    sketch: true
+  }
+}
+
+direction: down
+
+User: {shape: person}
+
+Client: Client Layer {
+  ui: Discord-like Chat UI
+}
+
+Mesh: Agent Mesh Layer {
+  a1: Agent A
+  a2: Agent B
+  a3: Agent C
+
+  a1 <-> a2: sessions (1..n)
+  a2 <-> a3: sessions (1..n)
+  a1 <-> a3: sessions (1..n)
+}
+
+Memory: Project Memory Layer {
+  am: Agent Memory\nrole / rules / Poincare hierarchy
+  kg: Knowledge Graph\ndocs & papers as nodes
+}
+
+Config: Custom Config
+
+User <-> Client.ui: chat
+Client.ui <-> Mesh: messages\n(every agent)
+Mesh <-> Memory.am: read / write\n(every agent)
+Mesh <-> Memory.kg: read / write\n(every agent)
+Memory.am <-> Memory.kg
+Config -> Mesh: define swarm
