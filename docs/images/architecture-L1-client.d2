@@ -1,0 +1,61 @@
+vars: {
+  d2-config: {
+    sketch: false
+    theme-id: 200
+  }
+}
+
+direction: down
+
+title: "Termitaria L1 — Client Layer" {
+  near: top-center
+  shape: text
+  style.font-size: 22
+}
+
+user: User {shape: person}
+
+app: "Next.js App (web)" {
+  style.border-radius: 8
+
+  shell: "App Shell" {
+    nav: "Channel / Swarm Navigator"
+    composer: "Composer\n@mention agents · attach docs"
+  }
+
+  chat: "Chat Surface" {
+    timeline: "Message Timeline\nhuman + agent, interleaved"
+    stream: "Stream Renderer\ntoken deltas · tool-call cards"
+    threads: "Thread Panel\n1..n per message"
+  }
+
+  presence: "Presence & Typing\nwho is online / which agent is thinking"
+  swarmview: "Swarm View\nlive mesh: agents as nodes, sessions as edges"
+  inspector: "Memory Inspector\nKG node preview · agent memory tree"
+}
+
+gw: "Control Plane API (Go)" {
+  style.border-radius: 8
+  style.stroke-dash: 4
+  ws: "Realtime Gateway\nWebSocket"
+  rest: "REST / Connect-RPC\nswarms · sessions · memory"
+}
+
+user <-> app.shell: "interact"
+app.chat.stream <- gw.ws: "token stream\nagent deltas"
+app.chat.timeline <-> gw.ws: "messages"
+app.presence <- gw.ws: "presence events"
+app.swarmview <- gw.ws: "mesh topology events"
+app.shell.composer -> gw.rest: "send message /\nattach document"
+app.inspector <-> gw.rest: "read KG node /\nagent memory slice"
+
+note: |md
+  **MVP scope**
+  - one workspace, channels = swarms
+  - stream tokens per agent message
+  - swarm view renders live sessions
+| {
+  near: bottom-center
+  shape: text
+  style.font-size: 13
+}

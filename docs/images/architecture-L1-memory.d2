@@ -1,0 +1,71 @@
+vars: {
+  d2-config: {
+    sketch: false
+    theme-id: 200
+  }
+}
+
+direction: down
+
+title: "Termitaria L1 — Project Memory (Python intelligence plane)" {
+  near: top-center
+  shape: text
+  style.font-size: 22
+}
+
+mesh: "Agent Mesh" {shape: rectangle; style.stroke-dash: 4}
+
+gw: "Memory Service (Python · FastAPI/gRPC)" {
+  style.border-radius: 8
+  rec: "Recall API\nhierarchical query"
+  wr: "Write API\nepisode · document"
+  pol: "Policy\nwhat persists · decay"
+}
+
+kg: "Knowledge Graph" {
+  style.border-radius: 8
+  store: "FalkorDB\nproperty graph"
+  ingest: "Ingest pipeline\nchunk → embed → link"
+  nodes: "nodes: docs · papers · claims"
+  edges: "edges: cites · derives · depends"
+}
+
+am: "Agent Memory" {
+  style.border-radius: 8
+  pg: "Postgres\nrole · rules · episodes"
+  hyp: "Poincaré Embedding svc\nPyTorch / geoopt"
+  tree: "hierarchical memory\nprinciples → episodes"
+}
+
+vec: "Vector index (Qdrant)\nfast candidate recall" {
+  style.border-radius: 8
+}
+
+llm: "Nebius Token Factory\nNemotron (summarize / extract)" {
+  shape: cloud
+}
+
+mesh <-> gw.rec: "recall(context)"
+mesh <-> gw.wr: "write(result)"
+
+gw.wr -> kg.ingest: "new document / paper"
+kg.ingest -> kg.store: "upsert nodes + edges"
+kg.ingest -> llm: "extract claims / citations"
+gw.rec -> kg.store: "subgraph query"
+
+gw.wr -> am.pg: "episode"
+gw.rec -> am.tree: "level-aware recall"
+am.tree <-> am.hyp: "embed / nearest-in-ball"
+am.hyp -> vec: "candidate fetch"
+am.pg <- gw.pol: "role / rules"
+
+note: |md
+  **Two substrates, one API**
+  - KG = shared, compounding, cross-agent
+  - Agent memory = per-agent, hierarchical (Poincaré ball)
+  - Euclidean vector index is a *candidate generator*, not the memory model
+| {
+  near: bottom-center
+  shape: text
+  style.font-size: 13
+}

@@ -1,0 +1,77 @@
+vars: {
+  d2-config: {
+    sketch: false
+    theme-id: 200
+  }
+}
+
+direction: down
+
+title: "Termitaria L1 — Agent Mesh (Go control plane)" {
+  near: top-center
+  shape: text
+  style.font-size: 22
+}
+
+client: "Client Layer" {shape: rectangle; style.stroke-dash: 4}
+
+cp: "Control Plane (Go)" {
+  style.border-radius: 8
+
+  gw: "Realtime Gateway\nWS fan-out · presence"
+  api: "Swarm API\nCRUD swarms / agents / sessions"
+  sched: "Swarm Scheduler\nspec → live topology"
+  router: "Session Router\nopen · route · close"
+}
+
+bus: "NATS JetStream" {
+  style.border-radius: 8
+  s1: "stream: sessions.*\ndurable session events"
+  s2: "stream: tasks.*\nagent work items"
+  s3: "stream: memory.*\nrecall / write requests"
+}
+
+runtime: "Agent Runtime (Go)" {
+  style.border-radius: 8
+  sup: "Supervisor\none per agent"
+  sess: "Session actors\ngoroutine per 1..n session"
+  policy: "Policy\nturn-taking · budget · tool ACL"
+}
+
+brain: "Intelligence Plane (Python)" {
+  style.border-radius: 8
+  style.stroke-dash: 4
+  lg: "LangGraph workers\nreason · act · observe"
+  llm: "LLM client\nNebius Token Factory\nNemotron Super / Ultra"
+}
+
+mem: "Memory Plane" {
+  style.border-radius: 8
+  style.stroke-dash: 4
+  kg: "Knowledge Graph\n(FalkorDB)"
+  am: "Agent Memory\nPostgres + Poincaré svc"
+}
+
+client <-> cp.gw: "messages · streams"
+cp.api -> cp.sched: "define swarm"
+cp.sched -> runtime.sup: "spawn agents"
+cp.router <-> bus.s1: "session events"
+runtime.sess <-> bus.s1: "agent↔agent\n1..n sessions"
+runtime.sess -> bus.s2: "reasoning task"
+bus.s2 -> brain.lg: "consume"
+brain.lg -> brain.llm: "chat completions"
+brain.lg <-> bus.s3: "memory read / write"
+bus.s3 <-> mem.kg: "upsert nodes / edges"
+bus.s3 <-> mem.am: "recall / write episode"
+runtime.policy -> cp.gw: "stream deltas to UI"
+
+note: |md
+  **Key contracts**
+  - `Session` = durable, addressable, 1..n between any pair
+  - `SwarmSpec` = declarative graph of agents + allowed sessions
+  - mesh never calls torch in-process; memory is a service
+| {
+  near: bottom-center
+  shape: text
+  style.font-size: 13
+}
