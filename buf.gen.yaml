@@ -1,0 +1,18 @@
+version: v2
+plugins:
+  # Go 控制面（Gateway / Swarm API / Scheduler / Agent Runtime）
+  - remote: buf.build/protocolbuffers/go
+    out: gen/go
+    opt: paths=source_relative
+  - remote: buf.build/grpc/go
+    out: gen/go
+    opt: paths=source_relative
+  # 控制面 API 走 Connect-RPC（contracts.md §5），同时获得 REST + gRPC 绑定
+  - remote: buf.build/connectrpc/go
+    out: gen/go
+    opt: paths=source_relative
+  # Python 智能面（LangGraph workers / Memory / Knowledge Graph）
+  - remote: buf.build/protocolbuffers/python
+    out: gen/python
+  - remote: buf.build/grpc/python
+    out: gen/python

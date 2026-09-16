@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package termitaria.memory.v1;
+option go_package = "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/memory/v1;memoryv1";
+
+import "termitaria/common/v1/common.proto";
+
+// MemoryKind：记忆种类，按 Poincaré 球面从球心到球缘组织（架构 §5.1）。
+enum MemoryKind {
+  MEMORY_KIND_UNSPECIFIED = 0;
+  MEMORY_KIND_ROLE = 1;        // 角色（球心）
+  MEMORY_KIND_RULE = 2;        // 规则
+  MEMORY_KIND_PRINCIPLE = 3;   // 原则（episode 沉淀出的上位知识）
+  MEMORY_KIND_EPISODE = 4;     // 情节（球缘，具体会话产物）
+}
+
+// RecallDepth：层级感知召回的谱系（架构 §5.2 recall(context, level)）。
+enum RecallDepth {
+  RECALL_DEPTH_UNSPECIFIED = 0;
+  RECALL_DEPTH_PRINCIPLES_ONLY = 1;  // 只召回球心附近
+  RECALL_DEPTH_EPISODES_ONLY = 2;    // 只召回球缘
+  RECALL_DEPTH_AUTO = 3;             // 全谱层级感知，默认
+}
+
+// MemoryItem 是一条可召回的记忆单元。
+message MemoryItem {
+  string item_id = 1;
+  string agent_id = 2;
+  MemoryKind kind = 3;
+  string text = 4;
+  double score = 5;            // 最终排序分（Qdrant 候选 → Poincaré 距离精排后）
+  double poincare_radius = 6;  // ||x|| ∈ [0,1)：越小越靠球心、越抽象
+  string parent_id = 7;        // 层级父链，客户端可重组记忆树（Memory Inspector）
+  int64 occurred_at_ms = 8;
+  string source_session_id = 9;
+}
+
+// Episode 是一次 session 结束后沉淀的情节记忆。
+message Episode {
+  string agent_id = 1;
+  string session_id = 2;
+  string summary = 3;
+  repeated string salient_spans = 4;
+  repeated string graph_node_ids = 5;  // 关联的 KG 节点
+  int64 occurred_at_ms = 6;
+}
+
+message RecallRequest {
+  string agent_id = 1;
+  string query_text = 2;
+  RecallDepth depth = 3;
+  uint32 top_k = 4;
+  common.v1.Budget budget = 5;  // 召回延迟预算（架构 §6.1：50–200ms）
+}
+
+// RecallMeta 让召回过程可观测。
+message RecallMeta {
+  uint32 candidate_count = 1;  // Qdrant 欧氏候选数
+  uint32 reranked_count = 2;   // 双曲精排后返回数
+  int64 latency_ms = 3;
+  bool degraded = 4;           // true = 降级为纯欧氏排序（架构 §9 风险对策），接口不变
+}
+
+message RecallResponse {
+  repeated MemoryItem items = 1;
+  RecallMeta meta = 2;
+}
+
+message WriteEpisodeRequest {
+  Episode episode = 1;
+}
+
+message WriteEpisodeResponse {
+  string item_id = 1;
+}
+
+// Document 是进入 ingest pipeline（chunk → embed → LLM 抽 claim/citation → 写 KG）的单元。
+message Document {
+  string doc_id = 1;
+  string title = 2;
+  string uri = 3;              // 外部可取地址
+  string content_ref = 4;      // 对象存储 key——大文档正文不走 bus
+  string mime_type = 5;
+  string uploader_id = 6;      // user_id 或 agent_id
+}
+
+message WriteDocumentRequest {
+  Document document = 1;
+}
+
+message WriteDocumentResponse {
+  string doc_id = 1;
+  string ingest_task_id = 2;   // 异步入库，不阻塞聊天（架构 §6.1：2–10s 异步）
+}
+
+message GetAgentMemoryTreeRequest {
+  string agent_id = 1;
+  uint32 max_items = 2;
+}
+
+message GetAgentMemoryTreeResponse {
+  repeated MemoryItem items = 1;  // 含 parent_id 与 poincare_radius，客户端重组层级树
+}
+
+// MemoryService：agent 分级记忆的唯一读写口（架构 §5.2）。
+// 传输约定：Recall 走 request-reply（同步、有预算，在关键路径上）；
+// 写操作走 JetStream memory.*（异步、持久、可重放）。
+service MemoryService {
+  rpc Recall(RecallRequest) returns (RecallResponse);
+  rpc WriteEpisode(WriteEpisodeRequest) returns (WriteEpisodeResponse);
+  rpc WriteDocument(WriteDocumentRequest) returns (WriteDocumentResponse);
+  rpc GetAgentMemoryTree(GetAgentMemoryTreeRequest) returns (GetAgentMemoryTreeResponse);
+}

@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+package termitaria.swarm.v1;
+option go_package = "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/swarm/v1;swarmv1";
+
+import "termitaria/common/v1/common.proto";
+import "termitaria/memory/v1/memory.proto";
+import "termitaria/session/v1/session.proto";
+
+// SwarmSpec：声明式集群描述——节点（agent 类型 + 记忆策略）与边（允许的 session 策略）。
+// 「swarm 是配置，不是代码」（README）。用户以 YAML 编写（schemas/swarmspec.schema.json 校验），
+// Swarm Scheduler 编译为本运行时形态（架构 §3.1）。
+message SwarmSpec {
+  string swarm_id = 1;
+  string name = 2;
+  string version = 3;                 // semver，配置即代码
+  repeated AgentSpec agents = 4;
+  repeated EdgeSpec edges = 5;
+  TopologyPolicy topology = 6;
+  MemoryPolicy default_memory = 7;    // swarm 级默认，agent 可覆盖
+}
+
+message AgentSpec {
+  string agent_id = 1;                // swarm 内唯一，例："researcher"
+  string display_name = 2;
+  string role_prompt = 3;             // 角色 + 规则的 prompt 模板
+  ModelPolicy model = 4;
+  repeated string tool_allowlist = 5; // 工具 ACL（Policy 组件执行）
+  MemoryPolicy memory = 6;            // 覆盖 default_memory
+  common.v1.Budget budget = 7;        // 每次推理的默认预算
+}
+
+// ModelPolicy：role → 模型档位的路由配置（架构 §4：Nemotron Super 日常 / Ultra 重推理）。
+message ModelPolicy {
+  string provider = 1;                        // 默认 "nebius-token-factory"
+  common.v1.ModelTier default_tier = 2;       // 日常交互档
+  common.v1.ModelTier deep_tier = 3;          // 深度推理升级档
+}
+
+// EdgeSpec：允许两个 agent 之间开 session，并约束其策略。
+message EdgeSpec {
+  string from_agent = 1;
+  string to_agent = 2;
+  session.v1.SessionPolicy session_policy = 3;
+}
+
+// TopologyPolicy：防止拓扑爆炸（架构 §9 风险对策）。
+message TopologyPolicy {
+  uint32 max_sessions_total = 1;
+  uint32 max_fanout_per_agent = 2;
+}
+
+// MemoryPolicy：什么该沉淀、怎么召回、如何衰减（架构 §5.2 policy）。
+message MemoryPolicy {
+  bool write_episodes = 1;
+  uint32 recall_top_k = 2;
+  memory.v1.RecallDepth recall_depth = 3;
+  double decay_half_life_days = 4;    // 记忆衰减半衰期
+}
+
+enum SwarmStatus {
+  SWARM_STATUS_UNSPECIFIED = 0;
+  SWARM_STATUS_DRAFT = 1;
+  SWARM_STATUS_STARTING = 2;
+  SWARM_STATUS_RUNNING = 3;
+  SWARM_STATUS_STOPPED = 4;
+}
+
+// ---- 控制面 API ----
+
+message CreateSwarmRequest {
+  SwarmSpec spec = 1;
+}
+
+message CreateSwarmResponse {
+  string swarm_id = 1;
+}
+
+message GetSwarmRequest {
+  string swarm_id = 1;
+}
+
+message GetSwarmResponse {
+  SwarmSpec spec = 1;
+  SwarmStatus status = 2;
+}
+
+message StartSwarmRequest {
+  string swarm_id = 1;
+}
+
+message StartSwarmResponse {
+  SwarmStatus status = 1;
+}
+
+message StopSwarmRequest {
+  string swarm_id = 1;
+}
+
+message StopSwarmResponse {
+  SwarmStatus status = 1;
+}
+
+// SwarmService：swarm 生命周期管理（Swarm API 组件，Connect-RPC/REST 暴露，架构 §3.1）。
+service SwarmService {
+  rpc CreateSwarm(CreateSwarmRequest) returns (CreateSwarmResponse);
+  rpc GetSwarm(GetSwarmRequest) returns (GetSwarmResponse);
+  rpc StartSwarm(StartSwarmRequest) returns (StartSwarmResponse);
+  rpc StopSwarm(StopSwarmRequest) returns (StopSwarmResponse);
+}

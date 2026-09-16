@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://termitaria.dev/schemas/swarmspec/v1.json",
+  "title": "SwarmSpec",
+  "description": "Termitaria 声明式 swarm 配置。用户以 YAML 编写，CI 用本 schema 校验，Swarm Scheduler 编译为 termitaria.swarm.v1.SwarmSpec（proto 是同一契约的运行时表示，两者必须同步演进）。",
+  "type": "object",
+  "required": ["apiVersion", "kind", "name", "agents"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": { "const": "termitaria/v1" },
+    "kind": { "const": "SwarmSpec" },
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+    "version": { "type": "string", "default": "0.1.0" },
+    "agents": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/agent" }
+    },
+    "edges": {
+      "type": "array",
+      "default": [],
+      "items": { "$ref": "#/$defs/edge" }
+    },
+    "topology": { "$ref": "#/$defs/topology", "default": {} },
+    "memory": { "$ref": "#/$defs/memoryPolicy" }
+  },
+  "$defs": {
+    "agent": {
+      "type": "object",
+      "required": ["id", "rolePrompt"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+        "displayName": { "type": "string" },
+        "rolePrompt": { "type": "string", "minLength": 1 },
+        "model": { "$ref": "#/$defs/modelPolicy", "default": {} },
+        "tools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "工具 ACL 白名单，Policy 组件在运行时执行"
+        },
+        "memory": { "$ref": "#/$defs/memoryPolicy" },
+        "budget": { "$ref": "#/$defs/budget" }
+      }
+    },
+    "modelPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "type": "string", "default": "nebius-token-factory" },
+        "defaultTier": { "$ref": "#/$defs/modelTier", "default": "SUPER" },
+        "deepTier": { "$ref": "#/$defs/modelTier", "default": "ULTRA" }
+      }
+    },
+    "modelTier": {
+      "enum": ["NANO", "SUPER", "ULTRA"],
+      "description": "Nemotron 模型分层：Nano/Super 保响应，Ultra 保推理"
+    },
+    "edge": {
+      "type": "object",
+      "required": ["from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "type": "string", "description": "agent id" },
+        "to": { "type": "string", "description": "agent id" },
+        "sessionPolicy": { "$ref": "#/$defs/sessionPolicy", "default": {} }
+      }
+    },
+    "sessionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "turnTaking": { "enum": ["STRICT", "FREE"], "default": "FREE" },
+        "maxTurns": { "type": "integer", "minimum": 0, "default": 0, "description": "0 = 不限" },
+        "maxConcurrentSessions": { "type": "integer", "minimum": 1, "default": 1 }
+      }
+    },
+    "topology": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxSessionsTotal": { "type": "integer", "minimum": 1, "default": 20 },
+        "maxFanoutPerAgent": { "type": "integer", "minimum": 1, "default": 3 }
+      }
+    },
+    "memoryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "writeEpisodes": { "type": "boolean", "default": true },
+        "recallTopK": { "type": "integer", "minimum": 1, "default": 8 },
+        "recallDepth": {
+          "enum": ["PRINCIPLES_ONLY", "EPISODES_ONLY", "AUTO"],
+          "default": "AUTO"
+        },
+        "decayHalfLifeDays": { "type": "number", "exclusiveMinimum": 0, "default": 30 }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxTokens": { "type": "integer", "minimum": 1 },
+        "maxCostUsd": { "type": "number", "exclusiveMinimum": 0 },
+        "deadlineMs": { "type": "integer", "minimum": 0, "description": "相对毫秒数；0 = 不限" }
+      }
+    }
+  }
+}

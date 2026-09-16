@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package termitaria.graph.v1;
+option go_package = "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/graph/v1;graphv1";
+
+import "google/protobuf/struct.proto";
+
+// NodeKind：KG 节点类型（架构 §5.1：节点 = 文档/论文/主张）。
+enum NodeKind {
+  NODE_KIND_UNSPECIFIED = 0;
+  NODE_KIND_DOCUMENT = 1;  // 用户文档
+  NODE_KIND_PAPER = 2;     // agent 发现的重要文献
+  NODE_KIND_CLAIM = 3;     // ingest pipeline 抽取的主张
+  NODE_KIND_CONCEPT = 4;
+}
+
+// EdgeKind：边类型（架构 §5.1：边 = 引用/推导/依赖）。
+enum EdgeKind {
+  EDGE_KIND_UNSPECIFIED = 0;
+  EDGE_KIND_CITES = 1;
+  EDGE_KIND_DERIVES_FROM = 2;
+  EDGE_KIND_DEPENDS_ON = 3;
+  EDGE_KIND_SUPPORTS = 4;
+  EDGE_KIND_CONTRADICTS = 5;
+}
+
+// Node：FalkorDB 属性图节点。
+message Node {
+  string node_id = 1;
+  NodeKind kind = 2;
+  string title = 3;
+  string uri = 4;
+  google.protobuf.Struct props = 5;  // 属性图属性（作者、年份、摘要……）
+  int64 created_at_ms = 6;
+}
+
+message Edge {
+  string edge_id = 1;
+  string from_node_id = 2;
+  string to_node_id = 3;
+  EdgeKind kind = 4;
+  google.protobuf.Struct props = 5;
+}
+
+message UpsertNodeRequest {
+  Node node = 1;
+}
+
+message UpsertNodeResponse {
+  string node_id = 1;
+}
+
+message UpsertEdgeRequest {
+  Edge edge = 1;
+}
+
+message UpsertEdgeResponse {
+  string edge_id = 1;
+}
+
+message GetNodeRequest {
+  string node_id = 1;
+}
+
+message GetNodeResponse {
+  Node node = 1;
+}
+
+// QuerySubgraph：以种子节点为中心的子图查询（架构 §5.1：子图查询召回）。
+// 消费方：worker 的上下文增强 + UI Memory Inspector 的 KG 预览。
+message QuerySubgraphRequest {
+  repeated string seed_node_ids = 1;
+  uint32 depth = 2;                 // 扩展跳数
+  repeated EdgeKind edge_kinds = 3; // 空 = 不过滤
+  uint32 max_nodes = 4;
+}
+
+message QuerySubgraphResponse {
+  repeated Node nodes = 1;
+  repeated Edge edges = 2;
+}
+
+// KnowledgeGraphService：知识图的唯一读写口（FalkorDB 之前）。
+// 知识图独立于聊天流存在，知识跨 session 沉淀为可查询资产（架构 §0 约束 3）。
+service KnowledgeGraphService {
+  rpc UpsertNode(UpsertNodeRequest) returns (UpsertNodeResponse);
+  rpc UpsertEdge(UpsertEdgeRequest) returns (UpsertEdgeResponse);
+  rpc GetNode(GetNodeRequest) returns (GetNodeResponse);
+  rpc QuerySubgraph(QuerySubgraphRequest) returns (QuerySubgraphResponse);
+}

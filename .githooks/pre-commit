@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Abort the commit if proto codegen fails.
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if ! command -v buf >/dev/null 2>&1; then
+  echo "pre-commit: buf is not on PATH; install buf or skip with git commit --no-verify" >&2
+  exit 1
+fi
+
+echo "pre-commit: buf generate"
+if ! buf generate; then
+  echo "pre-commit: buf generate failed" >&2
+  exit 1
+fi

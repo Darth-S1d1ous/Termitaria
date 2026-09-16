@@ -39,7 +39,7 @@
 
 - **Go 侧无状态优先**：Gateway / API 可水平扩；session 状态落在 NATS JetStream，actor 可重建。
 - **Python 侧无状态 worker**：LangGraph worker 消费任务，记忆与图是独立服务，可独立扩。
-- **契约先行**：`Session` / `SwarmSpec` / `Memory` / `Graph` 四个接口冻结，两侧各自演进。
+- **契约先行**：`Session` / `SwarmSpec` / `Memory` / `Graph` 四个接口冻结，两侧各自演进。契约定义见 [`docs/contracts.md`](contracts.md)（L1.5）与 `proto/`。
 
 ---
 

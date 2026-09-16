@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package termitaria.common.v1;
+option go_package = "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/common/v1;commonv1";
+
+// Envelope 是 bus 上所有消息的统一外壳（JetStream 与 core NATS 均使用）。
+// payload 为具体 proto 消息的序列化字节，schema 记录其全限定类型名。
+// 设计取舍：用 bytes + schema 而非 google.protobuf.Any —— 跨语言零类型注册成本，
+// 消息在 NATS 上自描述，便于重放与调试。
+message Envelope {
+  string event_id = 1;        // ULID，幂等/去重键
+  string trace_id = 2;        // 贯穿 用户请求 → session → task → memory 的全链路
+  int64 occurred_at_ms = 3;   // UTC epoch millis
+  string producer = 4;        // 组件标识："agent-runtime" / "memory-service" / ...
+  string schema = 5;          // 例："termitaria.session.v1.SessionEvent"
+  bytes payload = 6;          // 序列化后的具体消息
+}
+
+// Budget 约束一次推理或一次召回。
+message Budget {
+  uint32 max_tokens = 1;
+  double max_cost_usd = 2;
+  int64 deadline_ms = 3;      // 绝对截止时间（epoch ms）；0 = 不限
+}
+
+// ModelTier 对应 Nemotron 模型分层（架构 §4：Nano/Super 保响应，Ultra 保推理）。
+enum ModelTier {
+  MODEL_TIER_UNSPECIFIED = 0;
+  MODEL_TIER_NANO = 1;
+  MODEL_TIER_SUPER = 2;
+  MODEL_TIER_ULTRA = 3;
+}
+
+// ModelRef 是一次具体调用的模型解析结果（model router 的输出）。
+message ModelRef {
+  string provider = 1;        // 固定为 "nebius-token-factory"（OpenAI 兼容出口）
+  ModelTier tier = 2;
+  string model = 3;           // 具体模型名，由配置注入，契约不硬编码
+}
+
+// Error 为机器可读错误契约，贯穿所有平面。
+message Error {
+  string code = 1;            // 例："BUDGET_EXCEEDED" / "RECALL_TIMEOUT" / "POLICY_DENIED"
+  string message = 2;         // 人可读描述
+  bool retryable = 3;
+}

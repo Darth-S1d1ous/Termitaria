@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package termitaria.session.v1;
+option go_package = "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/session/v1;sessionv1";
+
+import "termitaria/common/v1/common.proto";
+
+// Participant：session 的参与者。MVP 阶段每条 session 恰好 2 个（架构 §3.2）。
+message Participant {
+  oneof kind {
+    string agent_id = 1;
+    string user_id = 2;
+  }
+}
+
+// TurnTaking：轮转策略，由 Policy 组件执行。
+enum TurnTaking {
+  TURN_TAKING_UNSPECIFIED = 0;
+  TURN_TAKING_STRICT = 1;  // 严格轮转
+  TURN_TAKING_FREE = 2;    // 自由发言，仅受预算约束
+}
+
+// SessionPolicy：轮转、轮次、并发上限。
+// 定义在 session 包（运行时语义的所有者），swarm 配置引用它。
+message SessionPolicy {
+  TurnTaking turn_taking = 1;
+  uint32 max_turns = 2;               // 0 = 不限
+  uint32 max_concurrent_sessions = 3; // 同一条边上的并发 session 上限
+}
+
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STATE_OPEN = 1;
+  SESSION_STATE_SUSPENDED = 2;
+  SESSION_STATE_CLOSED = 3;
+}
+
+// Session：两个参与者之间一条可寻址、持久的会话——一等公民（架构 §3.2）。
+// 同一对 agent 可并发多条。
+message Session {
+  string session_id = 1;
+  string swarm_id = 2;
+  repeated Participant participants = 3;
+  SessionState state = 4;
+  SessionPolicy policy = 5;
+  uint32 turn_index = 6;
+  int64 opened_at_ms = 7;
+  int64 closed_at_ms = 8;
+}
+
+message ToolCall {
+  string call_id = 1;
+  string tool = 2;
+  bytes arguments_json = 3;
+}
+
+message ToolResult {
+  string call_id = 1;
+  bytes result_json = 2;
+  common.v1.Error error = 3;
+}
+
+// Attachment：消息携带的外部内容；若已入 KG 则带 graph_node_id。
+message Attachment {
+  string uri = 1;
+  string graph_node_id = 2;
+  string mime_type = 3;
+}
+
+// ContentBlock：消息内容的可组合单元（文本 / 工具调用 / 工具结果 / 附件）。
+message ContentBlock {
+  oneof block {
+    string text = 1;
+    ToolCall tool_call = 2;
+    ToolResult tool_result = 3;
+    Attachment attachment = 4;
+  }
+}
+
+message Message {
+  string message_id = 1;
+  string session_id = 2;
+  Participant from = 3;
+  repeated ContentBlock content = 4;
+  string reply_to_message_id = 5;
+  uint32 turn_index = 6;
+  int64 created_at_ms = 7;
+}
+
+// ---- sessions.* 流上的事件（Envelope.payload 的反序列化目标）----
+
+message SessionOpened {
+  Session session = 1;
+}
+
+message MessageAppended {
+  Message message = 1;
+}
+
+message TurnAdvanced {
+  uint32 turn_index = 1;
+  Participant next_speaker = 2;
+}
+
+message SessionSuspended {
+  string reason = 1;
+}
+
+message SessionClosed {
+  string reason = 1;
+}
+
+// SessionEvent：session 状态机的全部变更。
+// 持久于 JetStream sessions.*，可重放——actor 崩溃后由事件流重建状态（架构 §1）。
+message SessionEvent {
+  string session_id = 1;
+  string swarm_id = 2;
+  oneof event {
+    SessionOpened opened = 3;
+    MessageAppended message_appended = 4;
+    TurnAdvanced turn_advanced = 5;
+    SessionSuspended suspended = 6;
+    SessionClosed closed = 7;
+  }
+}
+
+// ---- 控制面 API ----
+
+message OpenSessionRequest {
+  string swarm_id = 1;
+  repeated Participant participants = 2;   // MVP：恰好 2 个
+  SessionPolicy policy_override = 3;       // 覆盖 SwarmSpec 边上的默认策略
+}
+
+message OpenSessionResponse {
+  Session session = 1;
+}
+
+message CloseSessionRequest {
+  string session_id = 1;
+  string reason = 2;
+}
+
+message CloseSessionResponse {
+  Session session = 1;
+}
+
+message GetSessionRequest {
+  string session_id = 1;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message ListSessionsRequest {
+  string swarm_id = 1;
+  SessionState state_filter = 2;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+}
+
+// AppendMessage：人或系统向 session 写消息的入口。
+// agent 的消息不经过此口——task 完成后由 session actor 追加（单写者原则，见 contracts.md §1）。
+message AppendMessageRequest {
+  string session_id = 1;
+  Participant from = 2;
+  repeated ContentBlock content = 3;
+  string reply_to_message_id = 4;
+  string client_msg_id = 5;  // 客户端幂等键，防重发
+}
+
+message AppendMessageResponse {
+  Message message = 1;
+}
+
+// SessionService：session 的打开 / 路由 / 关闭（Session Router 组件，架构 §3.1）。
+service SessionService {
+  rpc OpenSession(OpenSessionRequest) returns (OpenSessionResponse);
+  rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc AppendMessage(AppendMessageRequest) returns (AppendMessageResponse);
+}

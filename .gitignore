@@ -1,1 +1,19 @@
 .DS_Store
+
+# buf generate
+gen/
+
+# environment and secret
+.env
+
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+
+# Node
+node_modules/
+.next/
+
+# example and temporary files
+*.example

@@ -54,4 +54,4 @@ Go control plane for scheduling, sessions, and the gateway; Python intelligence 
 
 ## Status
 
-MVP in active development. See [`docs/architecture.md`](docs/architecture.md) for the L1 architecture and [`docs/background.md`](docs/background.md) for the motivation.
+MVP in active development. See [`docs/concepts.md`](docs/concepts.md) for the domain language, [`docs/architecture.md`](docs/architecture.md) for the L1 architecture, and [`docs/background.md`](docs/background.md) for the motivation.

@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package termitaria.task.v1;
+option go_package = "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/task/v1;taskv1";
+
+import "termitaria/common/v1/common.proto";
+import "termitaria/memory/v1/memory.proto";
+import "termitaria/session/v1/session.proto";
+
+// Task：一次推理工作项（架构 §3.2：含上下文、预算、回调 stream）。
+// 性能原则 1（架构 §6.3）：控制面永不为 LLM 阻塞——一切推理异步走 tasks.*。
+message Task {
+  string task_id = 1;
+  string swarm_id = 2;
+  string agent_id = 3;             // 哪个 agent 在思考
+  string session_id = 4;           // 触发的 session
+  string trigger_message_id = 5;   // 触发消息
+  TaskContext context = 6;
+  common.v1.Budget budget = 7;
+  common.v1.ModelRef model = 8;    // model router 已解析好档位
+  string delta_subject = 9;        // worker 流式回写的 subject
+  int64 enqueued_at_ms = 10;
+}
+
+// TaskContext：worker 的全部输入——会话窗口 + 预取记忆 + 相关 KG 节点。
+// worker 无状态（架构 §4），上下文必须自包含。
+message TaskContext {
+  repeated session.v1.Message window = 1;
+  repeated memory.v1.MemoryItem recalled = 2;
+  repeated string graph_node_ids = 3;
+}
+
+enum TaskStatus {
+  TASK_STATUS_UNSPECIFIED = 0;
+  TASK_STATUS_QUEUED = 1;
+  TASK_STATUS_RUNNING = 2;
+  TASK_STATUS_COMPLETED = 3;
+  TASK_STATUS_FAILED = 4;
+  TASK_STATUS_CANCELLED = 5;       // 预算耗尽 / 超时 / 主动取消
+}
+
+// TaskDelta：流式增量，经 Policy → Gateway → UI（架构 §3.3 步骤 5）。
+// 走 core NATS 不持久化——高频瞬时数据，最终态由 TaskResult + MessageAppended 保证。
+message TaskDelta {
+  string task_id = 1;
+  uint64 seq = 2;                  // 单调递增，客户端可重排
+  oneof delta {
+    string text = 3;
+    session.v1.ToolCall tool_call = 4;
+    TaskUsage usage = 5;           // 收尾帧
+    common.v1.Error error = 6;
+  }
+}
+
+// TaskUsage：token 用量——hackathon 展示模型分层与成本的关键数据（架构 §7）。
+message TaskUsage {
+  uint32 prompt_tokens = 1;
+  uint32 completion_tokens = 2;
+  double cost_usd = 3;
+  string model = 4;                // 实际调用的模型
+}
+
+// TaskResult：worker 完成后的最终结果。
+// 由 session actor 消费并追加为 MessageAppended——session actor 是其 session 流的唯一写者。
+message TaskResult {
+  string task_id = 1;
+  TaskStatus status = 2;
+  session.v1.Message message = 3;  // 组装好的最终消息
+  TaskUsage usage = 4;
+  common.v1.Error error = 5;
+}
