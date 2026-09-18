@@ -7,13 +7,11 @@ import "termitaria/common/v1/common.proto";
 import "termitaria/memory/v1/memory.proto";
 import "termitaria/session/v1/session.proto";
 
-// SwarmSpec：声明式集群描述——节点（agent 类型 + 记忆策略）与边（允许的 session 策略）。
-// 「swarm 是配置，不是代码」（README）。用户以 YAML 编写（schemas/swarmspec.schema.json 校验），
-// Swarm Scheduler 编译为本运行时形态（架构 §3.1）。
-//
-// 拓扑为星型：一个项目 = 一个 swarm，goal 是项目目标；恰好一个 orchestrator
-// （项目管理员），它与每个 worker 之间的 spoke 隐式存在；worker 之间默认禁止直连，
-// 显式 EdgeSpec 是唯一的 opt-in 通道。
+// ---- 泛用：swarm 配置（两类 agent 共用）----
+// 设计理由（为何星型、一个项目 = 一个 swarm、subagent 两层模型）见 docs/design/topology.md。
+
+// SwarmSpec：声明式集群描述——一个项目 = 一个 swarm，星型拓扑。
+// 用户以 YAML 编写（schemas/swarmspec.schema.json 校验），Swarm Scheduler 编译为本运行时形态。
 message SwarmSpec {
   string swarm_id = 1;
   string name = 2;
@@ -22,16 +20,14 @@ message SwarmSpec {
   repeated EdgeSpec edges = 5;
   TopologyPolicy topology = 6;
   MemoryPolicy default_memory = 7;    // swarm 级默认，agent 可覆盖
-  string goal = 8;                    // 项目目标——orchestrator 的规划输入（plan/delegate/monitor 围绕它）
+  string goal = 8;                    // 项目目标——orchestrator 的规划输入
 }
 
-// AgentKind：星型拓扑中的角色分工。
-// worker 的 subagent 是父 agent 的附属，不参与 agent mesh，不在本枚举内
-// （进程内同步调用，不走 tasks.* 总线）。
+// AgentKind：星型拓扑中的角色分工；每 swarm 恰好一个 ORCHESTRATOR（schema 与 Scheduler 双校验）。
 enum AgentKind {
   AGENT_KIND_UNSPECIFIED = 0;
   AGENT_KIND_WORKER = 1;
-  AGENT_KIND_ORCHESTRATOR = 2;  // 每 swarm 恰好一个；schema 与 Scheduler 双校验
+  AGENT_KIND_ORCHESTRATOR = 2;
 }
 
 message AgentSpec {
@@ -50,15 +46,6 @@ message ModelPolicy {
   string provider = 1;                        // 默认 "nebius-token-factory"
   common.v1.ModelTier default_tier = 2;       // 日常交互档
   common.v1.ModelTier deep_tier = 3;          // 深度推理升级档
-}
-
-// EdgeSpec：worker 之间的受控直连通道（星型拓扑下唯一的 worker↔worker opt-in），
-// 并约束其策略。orchestrator↔worker 的 spoke 隐式存在、无需声明；
-// orchestrator 参与的边不允许声明（Scheduler 校验）。
-message EdgeSpec {
-  string from_agent = 1;
-  string to_agent = 2;
-  session.v1.SessionPolicy session_policy = 3;
 }
 
 // TopologyPolicy：防止拓扑爆炸（架构 §9 风险对策）。
@@ -81,6 +68,16 @@ enum SwarmStatus {
   SWARM_STATUS_STARTING = 2;
   SWARM_STATUS_RUNNING = 3;
   SWARM_STATUS_STOPPED = 4;
+}
+
+// ---- worker 专属：peer 直连通道（opt-in）----
+
+// EdgeSpec：worker 之间的受控直连通道（星型拓扑下唯一的 worker↔worker opt-in）。
+// orchestrator↔worker 的 spoke 隐式存在、无需声明；orchestrator 参与的边不允许声明。
+message EdgeSpec {
+  string from_agent = 1;
+  string to_agent = 2;
+  session.v1.SessionPolicy session_policy = 3;
 }
 
 // ---- 控制面 API ----

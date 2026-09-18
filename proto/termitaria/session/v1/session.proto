@@ -5,7 +5,7 @@ option go_package = "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/sessi
 
 import "termitaria/common/v1/common.proto";
 
-// Participant：session 的参与者。MVP 阶段每条 session 恰好 2 个（架构 §3.2）。
+// Participant：session 的参与者（MVP 每条恰好 2 个，架构 §3.2）。
 message Participant {
   oneof kind {
     string agent_id = 1;
@@ -20,8 +20,7 @@ enum TurnTaking {
   TURN_TAKING_FREE = 2;    // 自由发言，仅受预算约束
 }
 
-// SessionPolicy：轮转、轮次、并发上限。
-// 定义在 session 包（运行时语义的所有者），swarm 配置引用它。
+// SessionPolicy：轮转、轮次、并发上限（session 包持有，swarm 配置引用）。
 message SessionPolicy {
   TurnTaking turn_taking = 1;
   uint32 max_turns = 2;               // 0 = 不限
@@ -35,8 +34,7 @@ enum SessionState {
   SESSION_STATE_CLOSED = 3;
 }
 
-// Session：两个参与者之间一条可寻址、持久的会话——一等公民（架构 §3.2）。
-// 同一对 agent 可并发多条。
+// Session：两个参与者之间一条可寻址、持久的会话——一等公民；同一对 agent 可并发多条（架构 §3.2）。
 message Session {
   string session_id = 1;
   string swarm_id = 2;
@@ -110,8 +108,7 @@ message SessionClosed {
   string reason = 1;
 }
 
-// SessionEvent：session 状态机的全部变更。
-// 持久于 JetStream sessions.*，可重放——actor 崩溃后由事件流重建状态（架构 §1）。
+// SessionEvent：session 状态机的全部变更；持久于 JetStream sessions.*，可重放重建（concepts §2）。
 message SessionEvent {
   string session_id = 1;
   string swarm_id = 2;
@@ -162,8 +159,7 @@ message ListSessionsResponse {
   repeated Session sessions = 1;
 }
 
-// AppendMessage：人或系统向 session 写消息的入口。
-// agent 的消息不经过此口——task 完成后由 session actor 追加（单写者原则，见 contracts.md §1）。
+// AppendMessage：人或系统的写入口；agent 消息走 task 回路由 actor 追加（单写者，contracts §1）。
 message AppendMessageRequest {
   string session_id = 1;
   Participant from = 2;
@@ -176,10 +172,7 @@ message AppendMessageResponse {
   Message message = 1;
 }
 
-// SessionService：session 的打开 / 路由 / 关闭（Session Router 组件，架构 §3.1）。
-// 星型拓扑校验在 OpenSession 执行：orchestrator↔worker 的 spoke 隐式允许；
-// worker↔worker 需 SwarmSpec 显式 EdgeSpec，否则 POLICY_DENIED
-// （TopologyPolicy 的 session 数上限同在此执行，concepts §1）。
+// SessionService：session 的打开 / 路由 / 关闭；星型拓扑校验在 OpenSession 执行（docs/design/topology.md）。
 service SessionService {
   rpc OpenSession(OpenSessionRequest) returns (OpenSessionResponse);
   rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);

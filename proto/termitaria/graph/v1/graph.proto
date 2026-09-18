@@ -66,8 +66,7 @@ message GetNodeResponse {
   Node node = 1;
 }
 
-// QuerySubgraph：以种子节点为中心的子图查询（架构 §5.1：子图查询召回）。
-// 消费方：worker 的上下文增强 + UI Memory Inspector 的 KG 预览。
+// QuerySubgraph：以种子节点为中心的子图查询（worker 上下文增强 + UI KG 预览）。
 message QuerySubgraphRequest {
   repeated string seed_node_ids = 1;
   uint32 depth = 2;                 // 扩展跳数
@@ -80,8 +79,7 @@ message QuerySubgraphResponse {
   repeated Edge edges = 2;
 }
 
-// KnowledgeGraphService：知识图的唯一读写口（FalkorDB 之前）。
-// 知识图独立于聊天流存在，知识跨 session 沉淀为可查询资产（架构 §0 约束 3）。
+// KnowledgeGraphService：知识图的唯一读写口；KG 独立于聊天流存在（架构 §0 约束 3）。
 service KnowledgeGraphService {
   rpc UpsertNode(UpsertNodeRequest) returns (UpsertNodeResponse);
   rpc UpsertEdge(UpsertEdgeRequest) returns (UpsertEdgeResponse);

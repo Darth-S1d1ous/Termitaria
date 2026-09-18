@@ -3,10 +3,7 @@ syntax = "proto3";
 package termitaria.common.v1;
 option go_package = "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/common/v1;commonv1";
 
-// Envelope 是 bus 上所有消息的统一外壳（JetStream 与 core NATS 均使用）。
-// payload 为具体 proto 消息的序列化字节，schema 记录其全限定类型名。
-// 设计取舍：用 bytes + schema 而非 google.protobuf.Any —— 跨语言零类型注册成本，
-// 消息在 NATS 上自描述，便于重放与调试。
+// Envelope 是 bus 上所有消息的统一外壳（bytes + schema 的取舍见 contracts §1.1）。
 message Envelope {
   string event_id = 1;        // ULID，幂等/去重键
   string trace_id = 2;        // 贯穿 用户请求 → session → task → memory 的全链路

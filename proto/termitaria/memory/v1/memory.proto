@@ -102,9 +102,7 @@ message GetAgentMemoryTreeResponse {
   repeated MemoryItem items = 1;  // 含 parent_id 与 poincare_radius，客户端重组层级树
 }
 
-// MemoryService：agent 分级记忆的唯一读写口（架构 §5.2）。
-// 传输约定：Recall 走 request-reply（同步、有预算，在关键路径上）；
-// 写操作走 JetStream memory.*（异步、持久、可重放）。
+// MemoryService：agent 分级记忆的唯一读写口（架构 §5.2；传输约定见 contracts §2）。
 service MemoryService {
   rpc Recall(RecallRequest) returns (RecallResponse);
   rpc WriteEpisode(WriteEpisodeRequest) returns (WriteEpisodeResponse);

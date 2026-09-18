@@ -4,6 +4,7 @@
 > 两个控制面 API、一个客户端协议，在此冻结。
 > Go 控制面与 Python 智能面只依赖 `proto/` 与 `schemas/`，两侧各自演进（架构 §1、§9）。
 > 本文档是契约层（L1.5）：描述接口、载体与演进规则；模块内部实现（L2）不在此列。
+> 契约只冻结「是什么」；设计理由（为什么）见 [`docs/design/`](design/)（topology / task-lifecycle / ledger）。
 
 ---
 
