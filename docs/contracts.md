@@ -16,10 +16,11 @@
 | `MemoryService` | [memory.proto](../proto/termitaria/memory/v1/memory.proto) | `memory.*`（request-reply + JetStream） | Memory 服务 (Py) | Py worker、Go runtime、UI（只读） |
 | `KnowledgeGraphService` | [graph.proto](../proto/termitaria/graph/v1/graph.proto) | RPC | KG 服务 (Py) | Py worker、ingest、UI（只读） |
 | `Task` / `TaskDelta` / `TaskResult` | [task.proto](../proto/termitaria/task/v1/task.proto) | JetStream `tasks.*` + core NATS | Agent Runtime (Go) | Py worker / Policy、Gateway |
+| `Ledger` / `LedgerEvent` | [project.proto](../proto/termitaria/project/v1/project.proto) | JetStream `ledger.*` | 项目骨架 (Go) | dispatcher、UI |
 | `SwarmService` / `SessionService` | swarm.proto / session.proto | Connect-RPC / REST | Swarm API (Go) | Client、CLI |
 | Gateway 协议 | 本文档 §6 | WebSocket + JSON | Gateway (Go) | Next.js client |
 
-**导入 DAG（无环）**：`common ← memory ← session ← swarm`，`task` 依赖 `session` + `memory` + `common`。
+**导入 DAG（无环）**：`common ← memory ← session ← swarm`，`common ← project`，`task` 依赖 `session` + `memory` + `project` + `common`。
 `SessionPolicy` 由 session 包持有（运行时语义的所有者），swarm 配置引用它；`RecallDepth` 由 memory 包持有，swarm 引用它。
 
 ---
@@ -44,6 +45,7 @@
 | `tasks.<swarm>.<agent>` | `Task` | JetStream 工作队列 | Agent Runtime → Py worker（HPA 按队列深度扩缩） |
 | `tasks.<swarm>.delta.<task>` | `TaskDelta` | core NATS（不持久化） | worker → Policy → Gateway → UI |
 | `tasks.<swarm>.result.<task>` | `TaskResult` | core NATS | worker → session actor |
+| `ledger.<swarm>.events` | `LedgerEvent` | JetStream（可重放） | 项目骨架 (Go) → dispatcher、UI |
 | `memory.recall` | `RecallRequest/Response` | request-reply | worker / runtime → Memory 服务 |
 | `memory.write.episode` | `WriteEpisodeRequest` | JetStream | session actor / worker → Memory 服务 |
 | `memory.write.document` | `WriteDocumentRequest` | JetStream | 用户 / agent → ingest pipeline → KG |
@@ -79,6 +81,8 @@
 
 - `ModelPolicy` 是 hackathon 展示点：role → Nemotron 档位（Nano/Super 保响应，Ultra 保推理），路由是配置不是代码。
 - `TopologyPolicy` 限制 `max_sessions_total` / `max_fanout_per_agent`，防拓扑爆炸（架构 §9）。
+- **星型拓扑**：`goal` 是项目目标（一个项目 = 一个 swarm）；`AgentSpec.kind` 区分 `WORKER` / `ORCHESTRATOR`，每 swarm 恰好一个 orchestrator（schema `minContains/maxContains` + Scheduler 双校验）。orchestrator↔worker 的 spoke 隐式存在；`EdgeSpec` 只声明 worker 之间的 opt-in 直连，`max_fanout_per_agent` 只约束 worker 的 peer 边数。
+- worker 的 subagent 是父 agent 的附属：不参与 mesh、不声明为 AgentSpec、不走 `tasks.*`——进程内同步调用，预算计入父 task（对应 LangChain subagents pattern；跨 agent 委派才走总线，且只有 orchestrator 能发起）。
 
 ### 3.3 Memory（memory/v1）
 
@@ -98,10 +102,24 @@
 
 一次推理工作项 = 自包含上下文 + 预算 + 回调 subject。
 
-- **自包含**：worker 无状态，`TaskContext` 必须带齐 会话窗口 + 预取记忆 + 相关 KG 节点 id。
+- **自包含**：worker 无状态，`TaskContext` 必须带齐 会话窗口 + 预取记忆 + 相关 KG 节点 id；orchestrator 任务另带 `ledger` 台账快照（dispatch 前由 Go 侧预取，与 memory recall 同原则）。
 - **预算**：`Budget{max_tokens, max_cost_usd, deadline_ms}`，耗尽即 `TASK_STATUS_CANCELLED`。
 - **双通道回写**：流式 `TaskDelta`（带 `seq` 可重排）走 delta subject；最终 `TaskResult` 走 result subject 给 session actor。
 - `TaskUsage` 记录实际模型与 token 用量——demo 时展示模型分层与成本（架构 §7）。
+
+**两种互斥的触发模式**（orchestrator 的思考也是 Task，走同一 `tasks.*` 队列与 consumer/runner 进程模型）：
+
+| | worker | orchestrator |
+| --- | --- | --- |
+| 触发源 | 消息 / turn（`trigger_message_id`） | 事件（`system_trigger`：项目启动 / 工单指派 / 逾期 / spoke 停滞） |
+| 图模板 | reason → act → observe | plan → delegate → monitor → nudge → synthesize |
+| 上下文 | window + recalled + KG 节点 | 另加 `LedgerSnapshot`（goal + 全部工单） |
+
+**委派链字段**：`parent_task_id`（因哪个 task 的产出而生，空 = 根）、`delegation_depth`（dispatcher 强制上限，防委派循环）、`work_item_id`（该 task 服务的工单，空 = 项目级规划任务）。root 关联由 `swarm_id` 免费提供（一个项目 = 一个 swarm），无需独立 root id。
+
+**Ledger 单写者约定**：orchestrator（LLM）的台账操作以 `ContentBlock.tool_call` 提议（tool 名约定 `ledger.*`：`ledger.create_work_item` / `ledger.assign` / `ledger.review` 等，参数为 JSON），Go 项目骨架校验（预算上限、assignee 存在、状态机合法）通过后落 `ledger.<swarm>.events`；worker 的交付经 spoke session 到达，由骨架转写为 `WorkItemDelivered`。worker 与 orchestrator 都不直接写 ledger 流——与 session 的单写者原则同构。
+
+**触发语义细节**：worker 的输出永远以消息形式经 spoke session 到达 orchestrator（消息触发）；只有时钟/控制面事件走 `system_trigger`。因此 `TaskStatus` 不需要 `WAITING`——事件驱动续跑使「等待」表现为 task 正常完成 + 事件到达后的新 task（≈ A2A `input-required` 的续跑语义，v1 内可按 §8 规则后补）。
 
 ---
 

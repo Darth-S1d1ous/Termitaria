@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package termitaria.project.v1;
+option go_package = "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/project/v1;projectv1";
+
+import "termitaria/common/v1/common.proto";
+
+// WorkItem：项目工单——orchestrator 推进项目的最小管理单元（task ledger 的一行）。
+// 一个项目 = 一个 swarm；ledger 是 swarm 级事件流 ledger.<swarm>.events 的 fold，
+// 与 session 同为事件溯源（concepts §2：流是事实来源，状态是 fold）。
+message WorkItem {
+  string work_item_id = 1;
+  string parent_work_item_id = 2;     // 分解树；空 = 直接服务 goal
+  string assignee_agent_id = 3;       // 负责 worker（PROPOSED 时可为空）
+  string title = 4;
+  string brief = 5;                   // 工单说明，orchestrator 撰写
+  WorkItemStatus status = 6;
+  common.v1.Budget budget = 7;        // 由项目预算派生（orchestrator 提议，Go 骨架校验上限）
+  string session_id = 8;              // 执行该工单的 spoke session（orchestrator↔assignee）
+  string deliverable_message_id = 9;  // 交付物锚点（spoke 中的消息）
+  string review_note = 10;            // 验收意见（ACCEPTED / REJECTED 时填）
+  int64 deadline_ms = 11;             // 绝对截止（epoch ms）；超时是 OVERDUE 系统触发源
+  int64 created_at_ms = 12;
+  int64 updated_at_ms = 13;
+}
+
+enum WorkItemStatus {
+  WORK_ITEM_STATUS_UNSPECIFIED = 0;
+  WORK_ITEM_STATUS_PROPOSED = 1;     // 规划产物，待指派
+  WORK_ITEM_STATUS_ASSIGNED = 2;     // 已指派，待 worker 开工
+  WORK_ITEM_STATUS_IN_PROGRESS = 3;  // worker 已领任务在跑
+  WORK_ITEM_STATUS_DELIVERED = 4;    // 已交付，待 orchestrator 验收
+  WORK_ITEM_STATUS_ACCEPTED = 5;     // 验收通过（终态）
+  WORK_ITEM_STATUS_REJECTED = 6;     // 打回，可返工或重新指派
+  WORK_ITEM_STATUS_BLOCKED = 7;      // 卡住，需 orchestrator 介入
+  WORK_ITEM_STATUS_CANCELLED = 8;    // 取消（终态）
+}
+
+// LedgerSnapshot：dispatch orchestrator task 前由 Go 侧预取的台账快照（TaskContext.ledger）。
+// 与「memory recall happens before task dispatch, not during inference」同一原则：
+// orchestrator 同样无状态，决策输入必须自包含。
+message LedgerSnapshot {
+  string goal = 1;                 // 项目目标（SwarmSpec.goal 的快照）
+  repeated WorkItem items = 2;
+}
+
+// ---- ledger.<swarm>.events 流上的事件 ----
+// 单写者 = Go 项目骨架：orchestrator（LLM）的台账操作以 tool_call 提议
+// （tool 名约定 ledger.*，见 contracts §4），骨架校验（预算上限、assignee 存在、
+// 状态机合法）通过后才落流。worker 的交付经 spoke session 到达，由骨架转写为
+// WorkItemDelivered——worker 永远不直接写 ledger。
+
+message LedgerEvent {
+  string swarm_id = 1;
+  string work_item_id = 2;
+  oneof event {
+    WorkItemCreated created = 3;
+    WorkItemStatusChanged status_changed = 4;
+    WorkItemDelivered delivered = 5;
+  }
+}
+
+message WorkItemCreated {
+  WorkItem item = 1;
+}
+
+message WorkItemStatusChanged {
+  WorkItemStatus from = 1;  // from 是 Python 关键字，生成代码需 getattr（同 session.v1.Message.from）
+  WorkItemStatus to = 2;
+  string note = 3;          // 验收意见 / 阻塞原因 / 打回说明
+}
+
+message WorkItemDelivered {
+  string deliverable_message_id = 1;  // 交付物锚点；落流后状态即 DELIVERED
+}

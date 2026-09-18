@@ -1,0 +1,23 @@
+[project]
+name = "termitaria-intelligence"
+version = "0.1.0"
+description = "Termitaria Python 智能面：LangGraph workers（架构 §4）。控制面在 Go（见 go.mod），本包只含 worker。"
+requires-python = ">=3.11"
+dependencies = [
+    "nats-py>=2.10",
+    "protobuf>=7.36.1",   # gen/python 的 pb2 由 protoc 7.36.1 生成，runtime 不能更旧
+    "langgraph>=0.2",
+    "ulid-py>=1.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+# 纯依赖清单 + pytest 配置：代码以源码方式从仓库根运行（python -m services.worker.main），
+# gen/python 由 services/worker/__init__.py 加进 sys.path；正式打包是 slice-2 的事。
+[tool.setuptools]
+py-modules = []
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

@@ -5,21 +5,32 @@ option go_package = "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/task/
 
 import "termitaria/common/v1/common.proto";
 import "termitaria/memory/v1/memory.proto";
+import "termitaria/project/v1/project.proto";
 import "termitaria/session/v1/session.proto";
 
 // Task：一次推理工作项（架构 §3.2：含上下文、预算、回调 stream）。
 // 性能原则 1（架构 §6.3）：控制面永不为 LLM 阻塞——一切推理异步走 tasks.*。
+//
+// 两种互斥的触发模式：
+// - worker 由消息/turn 驱动（trigger_message_id）：轮到它说话才思考；
+// - orchestrator 由事件驱动（system_trigger）：子结果到达、工单逾期、spoke 停滞、
+//   项目启动。orchestrator 的思考与 worker 同为 Task，走同一个 tasks.* 队列与
+//   consumer/runner 进程模型，只是 graph 模板不同（plan→delegate→monitor→nudge→synthesize）。
 message Task {
   string task_id = 1;
   string swarm_id = 2;
   string agent_id = 3;             // 哪个 agent 在思考
   string session_id = 4;           // 触发的 session
-  string trigger_message_id = 5;   // 触发消息
+  string trigger_message_id = 5;   // 触发消息（与 system_trigger 互斥）
   TaskContext context = 6;
   common.v1.Budget budget = 7;
   common.v1.ModelRef model = 8;    // model router 已解析好档位
   string delta_subject = 9;        // worker 流式回写的 subject
   int64 enqueued_at_ms = 10;
+  string parent_task_id = 11;      // 委派链：因哪个 task 的产出而生（空 = 根：用户消息 / 系统事件）
+  uint32 delegation_depth = 12;    // 距项目根的委派跳数；dispatcher 强制上限，防委派循环
+  SystemTrigger system_trigger = 13;  // 事件驱动触发（orchestrator 专属）
+  string work_item_id = 14;        // 该 task 服务的工单（空 = 项目级规划/监控任务）
 }
 
 // TaskContext：worker 的全部输入——会话窗口 + 预取记忆 + 相关 KG 节点。
@@ -28,6 +39,24 @@ message TaskContext {
   repeated session.v1.Message window = 1;
   repeated memory.v1.MemoryItem recalled = 2;
   repeated string graph_node_ids = 3;
+  // orchestrator 任务专属：dispatch 前由 Go 侧预取的台账快照。
+  // 与 memory recall 同一原则：台账读取发生在 task dispatch 之前，不在推理期间。
+  project.v1.LedgerSnapshot ledger = 4;
+}
+
+// SystemTrigger：事件驱动唤醒源（orchestrator 专属）。
+// worker 的输出永远以消息形式经 spoke session 到达；只有时钟/控制面事件走本通道。
+message SystemTrigger {
+  SystemTriggerKind kind = 1;
+  string work_item_id = 2;  // 相关工单（WORK_ITEM_* 类触发时必填）
+}
+
+enum SystemTriggerKind {
+  SYSTEM_TRIGGER_KIND_UNSPECIFIED = 0;
+  SYSTEM_TRIGGER_KIND_PROJECT_STARTED = 1;     // swarm 启动 → 初始规划（lead session）
+  SYSTEM_TRIGGER_KIND_WORK_ITEM_ASSIGNED = 2;  // 工单已指派 → 在对应 spoke 撰写委派 brief
+  SYSTEM_TRIGGER_KIND_WORK_ITEM_OVERDUE = 3;   // 工单逾期 → 催办 / 介入
+  SYSTEM_TRIGGER_KIND_SPOKE_STALLED = 4;       // spoke 停滞 → 跟进
 }
 
 enum TaskStatus {

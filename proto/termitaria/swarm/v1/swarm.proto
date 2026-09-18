@@ -10,6 +10,10 @@ import "termitaria/session/v1/session.proto";
 // SwarmSpec：声明式集群描述——节点（agent 类型 + 记忆策略）与边（允许的 session 策略）。
 // 「swarm 是配置，不是代码」（README）。用户以 YAML 编写（schemas/swarmspec.schema.json 校验），
 // Swarm Scheduler 编译为本运行时形态（架构 §3.1）。
+//
+// 拓扑为星型：一个项目 = 一个 swarm，goal 是项目目标；恰好一个 orchestrator
+// （项目管理员），它与每个 worker 之间的 spoke 隐式存在；worker 之间默认禁止直连，
+// 显式 EdgeSpec 是唯一的 opt-in 通道。
 message SwarmSpec {
   string swarm_id = 1;
   string name = 2;
@@ -18,6 +22,16 @@ message SwarmSpec {
   repeated EdgeSpec edges = 5;
   TopologyPolicy topology = 6;
   MemoryPolicy default_memory = 7;    // swarm 级默认，agent 可覆盖
+  string goal = 8;                    // 项目目标——orchestrator 的规划输入（plan/delegate/monitor 围绕它）
+}
+
+// AgentKind：星型拓扑中的角色分工。
+// worker 的 subagent 是父 agent 的附属，不参与 agent mesh，不在本枚举内
+// （进程内同步调用，不走 tasks.* 总线）。
+enum AgentKind {
+  AGENT_KIND_UNSPECIFIED = 0;
+  AGENT_KIND_WORKER = 1;
+  AGENT_KIND_ORCHESTRATOR = 2;  // 每 swarm 恰好一个；schema 与 Scheduler 双校验
 }
 
 message AgentSpec {
@@ -28,6 +42,7 @@ message AgentSpec {
   repeated string tool_allowlist = 5; // 工具 ACL（Policy 组件执行）
   MemoryPolicy memory = 6;            // 覆盖 default_memory
   common.v1.Budget budget = 7;        // 每次推理的默认预算
+  AgentKind kind = 8;                 // 缺省按 AGENT_KIND_WORKER 处理
 }
 
 // ModelPolicy：role → 模型档位的路由配置（架构 §4：Nemotron Super 日常 / Ultra 重推理）。
@@ -37,7 +52,9 @@ message ModelPolicy {
   common.v1.ModelTier deep_tier = 3;          // 深度推理升级档
 }
 
-// EdgeSpec：允许两个 agent 之间开 session，并约束其策略。
+// EdgeSpec：worker 之间的受控直连通道（星型拓扑下唯一的 worker↔worker opt-in），
+// 并约束其策略。orchestrator↔worker 的 spoke 隐式存在、无需声明；
+// orchestrator 参与的边不允许声明（Scheduler 校验）。
 message EdgeSpec {
   string from_agent = 1;
   string to_agent = 2;
@@ -47,7 +64,7 @@ message EdgeSpec {
 // TopologyPolicy：防止拓扑爆炸（架构 §9 风险对策）。
 message TopologyPolicy {
   uint32 max_sessions_total = 1;
-  uint32 max_fanout_per_agent = 2;
+  uint32 max_fanout_per_agent = 2;  // 只约束 worker 的 peer 边数；orchestrator 的 spoke 数由 max_sessions_total 兜底
 }
 
 // MemoryPolicy：什么该沉淀、怎么召回、如何衰减（架构 §5.2 policy）。

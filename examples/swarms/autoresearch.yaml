@@ -1,12 +1,31 @@
-# Autoresearch swarm：文献收集 → 想法生成 → 实验设计 → 评审 的实验室工作流。
-# 对应 background.md 的 autoresearch 场景，演示 mesh 拓扑、模型分层与记忆策略。
+# Autoresearch swarm：orchestrator（PI）推进 文献收集 → 想法生成 → 实验设计 → 评审 的实验室项目。
+# 对应 background.md 的 autoresearch 场景，演示星型拓扑、模型分层与记忆策略。
 # 校验：check-jsonschema --schemafile schemas/swarmspec.schema.json examples/swarms/*.yaml
 apiVersion: termitaria/v1
 kind: SwarmSpec
 name: autoresearch
-version: 0.1.0
+version: 0.2.0
+
+# 一个项目 = 一个 swarm：goal 是 orchestrator 的规划输入（plan → delegate → monitor → nudge → synthesize）
+goal: |
+  给定用户的文献库，产出一个经过评审的研究假设与可执行的实验计划：
+  文献缺口扫描 → 假设生成 → 实验设计 → 方法论评审，全部沉淀进知识图。
 
 agents:
+  # 星心：项目管理员。恰好一个 orchestrator（schema minContains/maxContains = 1）。
+  # tools 里的 ledger 是控制面指令族（ledger.* tool_call：建工单/指派/验收），
+  # 由 Go 项目骨架校验后落 ledger.<swarm>.events——orchestrator 不直接写流。
+  - id: pi
+    kind: ORCHESTRATOR
+    displayName: Principal Investigator
+    rolePrompt: |
+      You are the PI. You decompose the project goal into work items, assign them
+      to specialists, monitor the ledger, nudge stalled spokes, and review every
+      deliverable before accepting it. You never do the specialists' work yourself.
+    model: { defaultTier: SUPER, deepTier: ULTRA }  # 日常监控 Super，规划/验收升 Ultra
+    tools: [ledger, kg_query]
+    budget: { maxTokens: 16384, maxCostUsd: 2.00 }
+
   - id: collector
     displayName: Literature Collector
     rolePrompt: |
@@ -44,23 +63,16 @@ agents:
     tools: [kg_query]
     budget: { maxTokens: 16384, maxCostUsd: 1.50 }
 
+# worker↔worker 默认禁止，下面是唯一的 opt-in 受控直连：评审 ↔ 想法 的挑战回路。
+# 其余协作一律经 orchestrator 中继（spoke 隐式存在，无需声明）。
 edges:
-  - from: collector
-    to: ideator
-    sessionPolicy: { turnTaking: FREE, maxConcurrentSessions: 2 }
-  - from: ideator
-    to: experimenter
-    sessionPolicy: { turnTaking: STRICT, maxTurns: 12 }
-  - from: experimenter
-    to: reviewer
-    sessionPolicy: { turnTaking: STRICT, maxTurns: 8 }
   - from: reviewer
-    to: ideator  # 评审 ↔ 想法 的挑战回路
+    to: ideator
     sessionPolicy: { turnTaking: FREE, maxConcurrentSessions: 2 }
 
 topology:
   maxSessionsTotal: 20
-  maxFanoutPerAgent: 3
+  maxFanoutPerAgent: 3  # 只约束 worker 的 peer 边数
 
 memory:
   writeEpisodes: true

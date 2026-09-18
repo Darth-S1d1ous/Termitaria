@@ -177,6 +177,9 @@ message AppendMessageResponse {
 }
 
 // SessionService：session 的打开 / 路由 / 关闭（Session Router 组件，架构 §3.1）。
+// 星型拓扑校验在 OpenSession 执行：orchestrator↔worker 的 spoke 隐式允许；
+// worker↔worker 需 SwarmSpec 显式 EdgeSpec，否则 POLICY_DENIED
+// （TopologyPolicy 的 session 数上限同在此执行，concepts §1）。
 service SessionService {
   rpc OpenSession(OpenSessionRequest) returns (OpenSessionResponse);
   rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);
