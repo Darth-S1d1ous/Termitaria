@@ -27,9 +27,13 @@ func TaskResult(swarmID, taskID string) string {
 	return fmt.Sprintf("tasks.%s.result.%s", swarmID, taskID)
 }
 
+const SessionEventsAll = "sessions.>"
+
 const MemoryRecall = "memory.recall"
 
 const (
-	MemoryWriteEpisode = "memory.write.episode"
+	MemoryWriteEpisode  = "memory.write.episode"
 	MemoryWriteDocument = "memory.write.document"
 )
+
+const TaskResultAll = "tasks.*.result.*"

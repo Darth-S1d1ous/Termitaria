@@ -230,3 +230,33 @@ func TestListSessions(t *testing.T) {
 		t.Errorf("list CLOSED = %v, want [%s]", closed, s1.SessionId)
 	}
 }
+
+// Snapshot：窗口按追加序、limit 取尾部；session 状态一并返回。
+func TestSnapshotWindow(t *testing.T) {
+	_, m := newManager(t)
+	sess := open(t, m, &sessionv1.SessionPolicy{TurnTaking: sessionv1.TurnTaking_TURN_TAKING_FREE})
+
+	var ids []string
+	for _, who := range []*sessionv1.Participant{agent("a"), agent("a"), agent("b")} {
+		msg, err := appendMsg(t, m, sess.SessionId, who, "")
+		if err != nil {
+			t.Fatalf("append: %v", err)
+		}
+		ids = append(ids, msg.GetMessageId())
+	}
+
+	snap, err := m.Snapshot(context.Background(), sess.SessionId, 2)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(snap.Window) != 2 {
+		t.Fatalf("window = %d 条，want 2", len(snap.Window))
+	}
+	if snap.Window[0].GetMessageId() != ids[1] || snap.Window[1].GetMessageId() != ids[2] {
+		t.Errorf("窗口应为最后 2 条且按追加序：got %q, %q",
+			snap.Window[0].GetMessageId(), snap.Window[1].GetMessageId())
+	}
+	if snap.Session.GetTurnIndex() != 3 {
+		t.Errorf("turn_index = %d, want 3", snap.Session.GetTurnIndex())
+	}
+}

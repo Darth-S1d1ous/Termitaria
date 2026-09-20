@@ -1,0 +1,28 @@
+%% M1 链路时序：user 问、agent 答（dispatcher 触发 + result 回写）
+%% 渲染：npx -y @mermaid-js/mermaid-cli -i docs/images/m1-loop-sequence.mmd -o docs/images/m1-loop-sequence.png -b white -s 2
+sequenceDiagram
+    autonumber
+    participant U as User u1
+    participant A as Session Actor（单写者）
+    participant D as Dispatcher
+    participant Q as tasks.sw1.ideator（JetStream 工作队列）
+    participant W as Python Worker（StubModel）
+
+    U->>A: AppendMessage（"你好"）
+    A->>A: 落 MessageAppended，turn 0→1
+    A-->>D: MessageAppended 事件（sessions.sw1.s_xx.events）
+    D->>A: Snapshot（session_id, 50）
+    A-->>D: OPEN · turn=1 · window=[你好]
+    D->>D: nextSpeaker=ideator（agent）· 派生 task_id=t_01J…
+    D->>Q: Task（t_01J…, window, budget, model）
+    Q->>W: pull 消费
+    W->>W: StubModel 流式推理
+    W--)D: TaskDelta（tasks.sw1.delta.t_01J…，core NATS 不持久化）
+    Note over W,D: delta 本切片无人消费（Gateway 是后续 slice）
+    W--)D: TaskResult COMPLETED（tasks.sw1.result.t_01J…）
+    D->>A: AppendMessage（client_msg_id=task:t_01J…）
+    A->>A: 落 MessageAppended（ideator 回复），turn 1→2
+    A-->>D: MessageAppended 事件
+    D->>A: Snapshot
+    A-->>D: OPEN · turn=2
+    D->>D: nextSpeaker=u1（人）→ 不触发，循环终止

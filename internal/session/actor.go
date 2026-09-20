@@ -19,21 +19,21 @@ import (
 const producer = "agent-runtime"
 
 var (
-	ErrSessionClosed 		= errors.New("session is closed")
-	ErrSessionSuspended 	= errors.New("session is suspended")
-	ErrNotYourTurn      	= errors.New("POLICY_DENIED: not this participant's turn")
-	ErrNeedTwoParticipants 	= errors.New("MVP: a session requires exactly 2 participants")
+	ErrSessionClosed       = errors.New("session is closed")
+	ErrSessionSuspended    = errors.New("session is suspended")
+	ErrNotYourTurn         = errors.New("POLICY_DENIED: not this participant's turn")
+	ErrNeedTwoParticipants = errors.New("MVP: a session requires exactly 2 participants")
 )
 
 type command interface{ apply(a *Actor) }
 
 type appendCmd struct {
-	from *sessionv1.Participant
-	content []*sessionv1.ContentBlock
-	replyTo string
+	from        *sessionv1.Participant
+	content     []*sessionv1.ContentBlock
+	replyTo     string
 	clientMsgID string
-	traceID string
-	result chan appendResult
+	traceID     string
+	result      chan appendResult
 }
 
 type appendResult struct {
@@ -64,22 +64,48 @@ func (c getCmd) apply(a *Actor) {
 	c.result <- proto.Clone(a.state).(*sessionv1.Session)
 }
 
+type Snapshot struct {
+	Session *sessionv1.Session
+	Window  []*sessionv1.Message
+}
+
+type snapshotCmd struct {
+	windowLimit int
+	result      chan Snapshot
+}
+
+func (c snapshotCmd) apply(a *Actor) {
+	ids := a.order
+	if c.windowLimit > 0 && len(ids) > c.windowLimit {
+		ids = ids[len(ids)-c.windowLimit:]
+	}
+	window := make([]*sessionv1.Message, 0, len(ids))
+	for _, id := range ids {
+		window = append(window, proto.Clone(a.messages[id]).(*sessionv1.Message))
+	}
+	c.result <- Snapshot{
+		Session: proto.Clone(a.state).(*sessionv1.Session),
+		Window:  window,
+	}
+}
+
 // ----- Actor -----
 
 type Actor struct {
-	bus 		*bus.Bus
-	state 		*sessionv1.Session
-	messages 	map[string]*sessionv1.Message
-	mailbox 	chan command
-	onExit 		func(sessionID string)
+	bus      *bus.Bus
+	state    *sessionv1.Session
+	messages map[string]*sessionv1.Message
+	order    []string
+	mailbox  chan command
+	onExit   func(sessionID string)
 }
 
 func newActor(b *bus.Bus, onExit func(string)) *Actor {
 	return &Actor{
-		bus: b,
+		bus:      b,
 		messages: make(map[string]*sessionv1.Message),
-		mailbox: make(chan command, 64),
-		onExit: onExit,
+		mailbox:  make(chan command, 64),
+		onExit:   onExit,
 	}
 }
 
@@ -96,17 +122,17 @@ func (a *Actor) run() {
 
 func (a *Actor) open(ctx context.Context, swarmID string, participants []*sessionv1.Participant, policy *sessionv1.SessionPolicy, traceID string) (*sessionv1.Session, error) {
 	session := &sessionv1.Session{
-		SessionId: "s_" + ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String(),
-		SwarmId: swarmID,
+		SessionId:    "s_" + ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String(),
+		SwarmId:      swarmID,
 		Participants: participants,
-		State: sessionv1.SessionState_SESSION_STATE_OPEN,
-		Policy: policy,
-		OpenedAtMs: time.Now().UnixMilli(),
+		State:        sessionv1.SessionState_SESSION_STATE_OPEN,
+		Policy:       policy,
+		OpenedAtMs:   time.Now().UnixMilli(),
 	}
 	event := &sessionv1.SessionEvent{
 		SessionId: session.SessionId,
-		SwarmId: swarmID,
-		Event: &sessionv1.SessionEvent_Opened{Opened: &sessionv1.SessionOpened{Session: session}},
+		SwarmId:   swarmID,
+		Event:     &sessionv1.SessionEvent_Opened{Opened: &sessionv1.SessionOpened{Session: session}},
 	}
 
 	if _, err := a.bus.Publish(ctx, bus.SessionSubject(swarmID, session.SessionId), producer, traceID, event); err != nil {
@@ -143,13 +169,13 @@ func (a *Actor) append(ctx context.Context, c appendCmd) (*sessionv1.Message, er
 		}
 	}
 	msg := &sessionv1.Message{
-		MessageId:         msgID,
-		SessionId:         a.state.GetSessionId(),
-		From:              c.from,
-		Content:           c.content,
-		ReplyToMessageId:  c.replyTo,
-		TurnIndex:         a.state.GetTurnIndex(),
-		CreatedAtMs:       time.Now().UnixMilli(),
+		MessageId:        msgID,
+		SessionId:        a.state.GetSessionId(),
+		From:             c.from,
+		Content:          c.content,
+		ReplyToMessageId: c.replyTo,
+		TurnIndex:        a.state.GetTurnIndex(),
+		CreatedAtMs:      time.Now().UnixMilli(),
 	}
 	if err := a.publish(ctx, c.traceID, &sessionv1.SessionEvent{Event: &sessionv1.SessionEvent_MessageAppended{
 		MessageAppended: &sessionv1.MessageAppended{Message: msg},
@@ -207,6 +233,7 @@ func (a *Actor) applyEvent(ev *sessionv1.SessionEvent) {
 	case *sessionv1.SessionEvent_MessageAppended:
 		m := e.MessageAppended.GetMessage()
 		a.messages[m.GetMessageId()] = m
+		a.order = append(a.order, m.GetMessageId())
 	case *sessionv1.SessionEvent_TurnAdvanced:
 		a.state.TurnIndex = e.TurnAdvanced.GetTurnIndex()
 	case *sessionv1.SessionEvent_Suspended:

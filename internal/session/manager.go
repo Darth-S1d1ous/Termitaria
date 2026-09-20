@@ -26,7 +26,13 @@ func NewManager(b *bus.Bus) *Manager {
 	return &Manager{bus: b, actors: make(map[string]*Actor)}
 }
 
-func (m *Manager) OpenSession(ctx context.Context, swarmID string, participants []*sessionv1.Participant, policy *sessionv1.SessionPolicy, traceID string) (*sessionv1.Session, error) {
+func (m *Manager) OpenSession(
+	ctx context.Context,
+	swarmID string,
+	participants []*sessionv1.Participant,
+	policy *sessionv1.SessionPolicy,
+	traceID string,
+) (*sessionv1.Session, error) {
 	if len(participants) != 2 {
 		return nil, ErrNeedTwoParticipants
 	}
@@ -96,6 +102,21 @@ func (m *Manager) GetSession(ctx context.Context, sessionID string) (*sessionv1.
 	select {
 	case sess := <-cmd.result:
 		return sess, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (m *Manager) Snapshot(ctx context.Context, sessionID string, windowLimit int) (*Snapshot, error) {
+	a, err := m.getOrRecover(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	cmd := snapshotCmd{windowLimit: windowLimit, result: make(chan Snapshot, 1)}
+	a.mailbox <- cmd
+	select {
+	case snap := <-cmd.result:
+		return &snap, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
