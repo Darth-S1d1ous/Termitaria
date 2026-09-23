@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	sessionv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/session/v1"
 	"github.com/Darth-S1d1ous/Termitaria/internal/bus"
@@ -160,6 +161,62 @@ func TestCloseSession(t *testing.T) {
 	if _, err := m.CloseSession(context.Background(), sess.SessionId, "again", ""); err != nil {
 		t.Errorf("重复关闭应幂等: %v", err)
 	}
+}
+
+// 空闲超时：无新消息超过 idle_timeout_ms → actor 自动关闭（reason=IDLE_TIMEOUT），
+// 关闭后拒绝写入；这是 memory episode 沉淀的触发源（contracts §3.1）。
+func TestIdleTimeoutAutoCloses(t *testing.T) {
+	_, m := newManager(t)
+	policy := strictPolicy()
+	policy.IdleTimeoutMs = 100
+	sess := open(t, m, policy)
+
+	waitState(t, m, sess.SessionId, sessionv1.SessionState_SESSION_STATE_CLOSED)
+	if _, err := appendMsg(t, m, sess.SessionId, agent("a"), ""); !errors.Is(err, session.ErrSessionClosed) {
+		t.Errorf("自动关闭后写入应拒绝, err = %v", err)
+	}
+}
+
+// 追加消息重置空闲时钟：间隔小于超时的持续发言不会让 session 关闭。
+func TestIdleTimeoutResetByAppend(t *testing.T) {
+	_, m := newManager(t)
+	policy := &sessionv1.SessionPolicy{
+		TurnTaking:    sessionv1.TurnTaking_TURN_TAKING_FREE,
+		IdleTimeoutMs: 300,
+	}
+	sess := open(t, m, policy)
+
+	// 每 150ms 发一条，共 450ms > 300ms 超时；若无重置早已关闭
+	for range 3 {
+		time.Sleep(150 * time.Millisecond)
+		if _, err := appendMsg(t, m, sess.SessionId, agent("a"), ""); err != nil {
+			t.Fatalf("持续发言期间不应关闭: %v", err)
+		}
+	}
+	got, _ := m.GetSession(context.Background(), sess.SessionId)
+	if got.GetState() != sessionv1.SessionState_SESSION_STATE_OPEN {
+		t.Fatalf("持续发言期间 state = %v, want OPEN", got.GetState())
+	}
+
+	// 停止发言 → 超时关闭
+	waitState(t, m, sess.SessionId, sessionv1.SessionState_SESSION_STATE_CLOSED)
+}
+
+// waitState 轮询直到 session 进入目标状态（5s 上限，防时序抖动误报）。
+func waitState(t *testing.T, m *session.Manager, sessionID string, want sessionv1.SessionState) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := m.GetSession(context.Background(), sessionID)
+		if err != nil {
+			t.Fatalf("GetSession: %v", err)
+		}
+		if got.GetState() == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("5s 内未进入 %v", want)
 }
 
 func TestGetSessionNotFound(t *testing.T) {

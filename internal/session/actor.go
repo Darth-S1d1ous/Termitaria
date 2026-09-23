@@ -115,9 +115,46 @@ func (a *Actor) run() {
 			a.onExit(a.state.GetSessionId())
 		}
 	}()
-	for cmd := range a.mailbox {
-		cmd.apply(a)
+
+	// 空闲计时器：超时即自动关闭（触发 memory 的 episode 沉淀，contracts §3.1）。
+	// 0 = 不启用。只有 appendCmd 重置计时——get/snapshot 是读操作，
+	var timer *time.Timer
+	var idleC <-chan time.Time
+	if d := a.idleTimeout(); d > 0 {
+		timer = time.NewTimer(d)
+		idleC = timer.C
+		defer timer.Stop()
 	}
+	resetIdle := func() {
+		if timer == nil {
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(a.idleTimeout())
+	}
+
+	for {
+		select {
+		case cmd := <-a.mailbox:
+			cmd.apply(a)
+			if _, isAppend := cmd.(appendCmd); isAppend {
+				resetIdle()
+			}
+		case <-idleC:
+			idleC = nil // 一次性；close 本身幂等，但计时器不必再跑
+			_ = a.close(context.Background(), "IDLE_TIMEOUT", "")
+		}
+	}
+}
+
+// idleTimeout 从当前策略读空闲超时时长；0 = 不自动关闭。
+func (a *Actor) idleTimeout() time.Duration {
+	return time.Duration(a.state.GetPolicy().GetIdleTimeoutMs()) * time.Millisecond
 }
 
 func (a *Actor) open(ctx context.Context, swarmID string, participants []*sessionv1.Participant, policy *sessionv1.SessionPolicy, traceID string) (*sessionv1.Session, error) {

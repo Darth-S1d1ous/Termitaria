@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -21,6 +22,9 @@ func main() {
 	natsURL := flag.String("nats", envOr("NATS_URL", "nats://localhost:4222"), "NATS URL")
 	agents := flag.String("agents", "", "逗号分隔的 agent id（MVP 统一 stub 模型配置）")
 	demo := flag.Bool("demo", false, "脚手架：开一条 user↔agents[0] 的 session 并发开场消息")
+	idleTimeoutMs := flag.Uint64("idle-timeout-ms",
+		envOrUint64("SESSION_IDLE_TIMEOUT_MS", 10*60*1000), // 暂定 10 分钟
+		"session 空闲自动关闭超时（SessionPolicy.idle_timeout_ms），0 = 不自动关闭")
 	flag.Parse()
 
 	ids := splitCSV(*agents)
@@ -61,7 +65,7 @@ func main() {
 	}
 	defer d.Stop()
 	if *demo {
-		openDemoSession(manager, ids[0])
+		openDemoSession(manager, ids[0], *idleTimeoutMs)
 	}
 	log.Printf("runtime up: agents=%v nats=%s", ids, *natsURL)
 	<-ctx.Done()
@@ -69,7 +73,7 @@ func main() {
 }
 
 // openDemoSession 是 M1 手动验收的脚手架；SessionService（Slice D）落地后删除。
-func openDemoSession(m *session.Manager, agentID string) {
+func openDemoSession(m *session.Manager, agentID string, idleTimeoutMs uint64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	sess, err := m.OpenSession(ctx, "sw1",
@@ -77,7 +81,10 @@ func openDemoSession(m *session.Manager, agentID string) {
 			{Kind: &sessionv1.Participant_UserId{UserId: "u_demo"}},
 			{Kind: &sessionv1.Participant_AgentId{AgentId: agentID}},
 		},
-		&sessionv1.SessionPolicy{TurnTaking: sessionv1.TurnTaking_TURN_TAKING_STRICT},
+		&sessionv1.SessionPolicy{
+			TurnTaking:    sessionv1.TurnTaking_TURN_TAKING_STRICT,
+			IdleTimeoutMs: idleTimeoutMs,
+		},
 		"")
 	if err != nil {
 		log.Fatalf("demo open session: %v", err)
@@ -106,6 +113,15 @@ func splitCSV(s string) []string {
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func envOrUint64(key string, fallback uint64) uint64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+			return n
+		}
 	}
 	return fallback
 }

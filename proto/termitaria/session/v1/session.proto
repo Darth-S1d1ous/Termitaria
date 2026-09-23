@@ -20,11 +20,12 @@ enum TurnTaking {
   TURN_TAKING_FREE = 2;    // 自由发言，仅受预算约束
 }
 
-// SessionPolicy：轮转、轮次、并发上限（session 包持有，swarm 配置引用）。
+// SessionPolicy：轮转、轮次、并发上限、空闲超时（session 包持有，swarm 配置引用）。
 message SessionPolicy {
   TurnTaking turn_taking = 1;
   uint32 max_turns = 2;               // 0 = 不限
   uint32 max_concurrent_sessions = 3; // 同一条边上的并发 session 上限
+  uint64 idle_timeout_ms = 4;         // 空闲超时，将状态改为 SESSION_STATE_CLOSED
 }
 
 enum SessionState {

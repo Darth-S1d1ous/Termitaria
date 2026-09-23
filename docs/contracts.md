@@ -67,7 +67,7 @@
 
 - 状态机：`OPEN → SUSPENDED ⇄ OPEN → CLOSED`，全部变更以 `SessionEvent` 落 `sessions.*`。
 - 消息内容是 `ContentBlock` 的组合：text / tool_call / tool_result / attachment（attachment 可携带 `graph_node_id`，把聊天产物锚定进 KG）。
-- `SessionPolicy`（轮转 / 轮次 / 并发上限）由 Policy 组件在每条 delta 通过时执行。
+- `SessionPolicy`（轮转 / 轮次 / 并发上限 / 空闲超时）由 Policy 组件在每条 delta 通过时执行；`idle_timeout_ms` 由 actor 自己执行——空闲超时即自动关闭（`IDLE_TIMEOUT`），成为 memory episode 沉淀的触发源。
 
 ### 3.2 SwarmSpec（swarm/v1 + JSON Schema）
 
