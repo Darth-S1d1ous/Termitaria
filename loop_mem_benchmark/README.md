@@ -53,3 +53,15 @@ CPU 上的全量切片大约要几分钟。结果写到：
 python3 -m pip install pytest
 python3 -m pytest
 ```
+
+## 结果
+
+同一套离线 ReAct、1444 题。主指标是 evidence hit@5 / recall@5，越大越好。
+
+| 系统 | evidence hit@5 | evidence recall@5 |
+| --- | ---: | ---: |
+| kuzu-memory（开源模块，公共 API） | 0.213 | 0.193 |
+| Kuzu 实体图（spaCy + Cypher） | **0.558** | **0.501** |
+| Poincaré 球距离 | 0.484 | 0.422 |
+
+Poincaré 高于 kuzu-memory。实体图高于 Poincaré，差距主要在单跳题和时序题；多跳题上 Poincaré 略高（0.479 对 0.436）。同一批向量上，Poincaré 排序和余弦排序的 top-5 Jaccard 是 0.335，球距离不是余弦的别名。完整表在 `results/comparison.md`。
