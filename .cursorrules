@@ -1,0 +1,7 @@
+## Comments
+- Do not remove comments written by me for better readability.
+- When adding comments, do not add any inline comments. Instead add before code blocks.
+
+## Code Quality
+- When drafing a prototype, do not overengineer by excessively adding error handling, boundary check and detailed comments. Instead keep the code concise
+- When adding new fields to data models, think twice whether the field is required or used. 

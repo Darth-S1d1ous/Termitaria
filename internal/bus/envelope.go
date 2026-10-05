@@ -30,24 +30,32 @@ func NewEnvelope(producer, traceID string, payload proto.Message) (*commonv1.Env
 	}
 
 	return &commonv1.Envelope{
-		EventId: eventID,
-		TraceId: traceID,
+		EventId:      eventID,
+		TraceId:      traceID,
 		OccurredAtMs: time.Now().UnixMilli(),
-		Producer: producer,
-		Schema: string(payload.ProtoReflect().Descriptor().FullName()),
-		Payload: data,
+		Producer:     producer,
+		Schema:       string(payload.ProtoReflect().Descriptor().FullName()),
+		Payload:      data,
 	}, nil
+}
+
+func marshalEnvelope(producer, traceID string, payload proto.Message) (*commonv1.Envelope, []byte, error) {
+	env, err := NewEnvelope(producer, traceID, payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err := proto.Marshal(env)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal envelope: %w", err)
+	}
+	return env, data, nil
 }
 
 // Publish 把消息包封后发到 JetStream 持久化 subject (sessions.* / tasks 队列 / memory.write.*)
 func (b *Bus) Publish(ctx context.Context, subject, producer, traceID string, payload proto.Message) (*commonv1.Envelope, error) {
-	env, err := NewEnvelope(producer, traceID, payload)
+	env, data, err := marshalEnvelope(producer, traceID, payload)
 	if err != nil {
 		return nil, err
-	}
-	data, err := proto.Marshal(env)
-	if err != nil {
-		return nil, fmt.Errorf("marshal envelope: %w", err)
 	}
 	if _, err := b.js.Publish(ctx, subject, data, jetstream.WithMsgID(env.EventId)); err != nil {
 		return nil, fmt.Errorf("publish %s: %w", subject, err)
@@ -56,14 +64,9 @@ func (b *Bus) Publish(ctx context.Context, subject, producer, traceID string, pa
 }
 
 func (b *Bus) PublishCore(subject, producer, traceID string, payload proto.Message) error {
-	env, err := NewEnvelope(producer, traceID, payload)
+	_, data, err := marshalEnvelope(producer, traceID, payload)
 	if err != nil {
 		return err
-	}
-
-	data, err := proto.Marshal(env)
-	if err != nil {
-		return fmt.Errorf("marshal envelope: %w", err)
 	}
 	return b.nc.Publish(subject, data)
 }

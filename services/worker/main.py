@@ -13,7 +13,7 @@ import nats
 
 from .config import WorkerConfig
 from .consumer import AgentConsumer
-from .model import StubModel
+from .model import select_model
 from .runner import TaskRunner
 
 
@@ -23,8 +23,11 @@ async def amain() -> None:
     )
     cfg = WorkerConfig.from_env()
     nc = await nats.connect(cfg.nats_url, name="termitaria-worker")
-    # LLM client（Token Factory）本切片不实现；替换点见 model.ModelPort
-    model = StubModel()
+    model = select_model(cfg.model)
+    logging.getLogger(__name__).info(
+        "model source: %s",
+        cfg.model.model if cfg.model.api_key else "stub",
+    )
     runner = TaskRunner(nc, model, cfg.producer)
     consumers = [AgentConsumer(nc, agent_id, runner, cfg) for agent_id in cfg.agent_ids]
     try:

@@ -28,6 +28,18 @@ _ROLE_KINDS = (
     memory_pb2.MEMORY_KIND_PRINCIPLE,
 )
 
+# Memory 召回未接时的 demo 角色。召回结果优先于这里。
+_FALLBACK_ROLES = {
+    "ideator": (
+        "你是 ideator。你提出并辩护研究假设，面对质疑时补证据或收窄主张。"
+        "用中文，每次只回复两三句。"
+    ),
+    "reviewer": (
+        "你是 reviewer。你挑剔地评审对方的假设：找漏洞、要证据、不轻易同意。"
+        "用中文，每次只回复两三句。"
+    ),
+}
+
 
 class WorkerState(TypedDict, total=False):
     task: task_pb2.Task
@@ -46,7 +58,7 @@ def build_graph(model: ModelPort, emit: EmitDelta):
     async def build_prompt(state: WorkerState) -> dict:
         task = state["task"]
         role_lines = [it.text for it in task.context.recalled if it.kind in _ROLE_KINDS]
-        system = "\n".join(role_lines) or (
+        system = "\n".join(role_lines) or _FALLBACK_ROLES.get(task.agent_id) or (
             f"You are agent '{task.agent_id}' in a Termitaria swarm. "
             "(stub system prompt：MemoryService 未接，role/rules 为空)"
         )

@@ -3,8 +3,6 @@
 - recall：core NATS request-reply（同步、有 Budget 约束；架构 §6.3）；
 - write：JetStream pull（异步、至少一次；event_id 去重，contracts §1.3）；
 - 落盘 JSONL 是 P1 的观测手段，同事接内核时换成 Postgres/Qdrant 写入。
-
-TODO(p2)：envelope 目前复用 services.worker，两包稳定后可上移到 services/common/。
 """
 from __future__ import annotations
 
@@ -17,7 +15,7 @@ from google.protobuf.message import Message as PbMessage
 
 from termitaria.memory.v1 import memory_pb2
 
-from services.worker import envelope
+from services.common import envelope
 
 from .canned import build_recall_response
 from .config import MemoryConfig

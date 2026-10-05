@@ -331,3 +331,114 @@ func TestM1Loop(t *testing.T) {
 		t.Errorf("agent 回复后轮到 user，不应再入队，却取到 %v", task.GetTaskId())
 	}
 }
+
+// 假 worker 按 runner 约定回一条 COMPLETED（不填 message_id / turn_index）。
+func completeTask(t *testing.T, b *bus.Bus, task *taskv1.Task, body string) {
+	t.Helper()
+	publishResult(t, b, task.GetSwarmId(), &taskv1.TaskResult{
+		TaskId: task.GetTaskId(),
+		Status: taskv1.TaskStatus_TASK_STATUS_COMPLETED,
+		Message: &sessionv1.Message{
+			SessionId:        task.GetSessionId(),
+			From:             agent(task.GetAgentId()),
+			Content:          []*sessionv1.ContentBlock{text(body)},
+			ReplyToMessageId: task.GetTriggerMessageId(),
+		},
+	})
+}
+
+func mustFetch(t *testing.T, b *bus.Bus, agentID string) *taskv1.Task {
+	t.Helper()
+	task, ok := fetchTask(t, b, "sw1", agentID)
+	if !ok {
+		t.Fatalf("%s 应有 task 入队", agentID)
+	}
+	if task.GetAgentId() != agentID {
+		t.Fatalf("task agent = %q, want %s", task.GetAgentId(), agentID)
+	}
+	return task
+}
+
+// 双 agent：ideator 开场后 reviewer 入队；A 的 result 让 B 入队，再回到 A；
+// max_turns 耗尽挂起后，下一发言者不再入队。
+func TestDualAgentPingPongStopsAtMaxTurns(t *testing.T) {
+	b, m, d := newDispatcher(t)
+	start(t, d)
+
+	policy := strictPolicy()
+	policy.MaxTurns = 5 // kickoff + 两轮对答；第 5 条落流时挂起
+	sess, err := m.OpenSession(context.Background(), "sw1",
+		[]*sessionv1.Participant{agent("ideator"), agent("reviewer")}, policy, "")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	// participants[0] 种 kickoff（与 -demo 相同），下一发言者是 reviewer。
+	appendMsg(t, m, sess.GetSessionId(), agent("ideator"))
+	reviewer1 := mustFetch(t, b, "reviewer")
+	completeTask(t, b, reviewer1, "reviewer-1")
+
+	// reviewer 的 result 落流 → 回到 ideator。
+	ideator1 := mustFetch(t, b, "ideator")
+	completeTask(t, b, ideator1, "ideator-1")
+
+	// ideator（A）的 TaskResult 落流 → reviewer（B）入队。
+	snap := waitWindow(t, m, sess.GetSessionId(), 3)
+	reviewer2 := mustFetch(t, b, "reviewer")
+	if reviewer2.GetTriggerMessageId() != snap.Window[2].GetMessageId() {
+		t.Errorf("trigger = %q, want ideator message %q",
+			reviewer2.GetTriggerMessageId(), snap.Window[2].GetMessageId())
+	}
+	completeTask(t, b, reviewer2, "reviewer-2")
+
+	// 再回到 ideator。这条 result 使 turn 达到 max_turns，session 挂起。
+	ideator2 := mustFetch(t, b, "ideator")
+	completeTask(t, b, ideator2, "ideator-2")
+
+	snap = waitWindow(t, m, sess.GetSessionId(), 5)
+	if snap.Session.GetState() != sessionv1.SessionState_SESSION_STATE_SUSPENDED {
+		t.Fatalf("state = %s, want SUSPENDED", snap.Session.GetState())
+	}
+	wantFrom := []string{"ideator", "reviewer", "ideator", "reviewer", "ideator"}
+	if len(snap.Window) != len(wantFrom) {
+		t.Fatalf("窗口 = %d 条，want %d", len(snap.Window), len(wantFrom))
+	}
+	for i, id := range wantFrom {
+		if got := snap.Window[i].GetFrom().GetAgentId(); got != id {
+			t.Errorf("window[%d] from = %q, want %q", i, got, id)
+		}
+	}
+
+	// 挂起后下一发言者（reviewer）不再入队。
+	if task, ok := fetchTask(t, b, "sw1", "reviewer"); ok {
+		t.Fatalf("挂起后不应再入队，却取到 reviewer task %s", task.GetTaskId())
+	}
+}
+
+func TestFromEnv(t *testing.T) {
+	t.Setenv("NVIDIA_MODEL", "")
+	t.Setenv("MODEL_MAX_TOKENS", "")
+	stub := FromEnv()
+	if stub.Model.GetProvider() != "nebius-token-factory" || stub.Model.GetModel() != "stub-model" {
+		t.Fatalf("unset model = %s/%s", stub.Model.GetProvider(), stub.Model.GetModel())
+	}
+	if stub.Budget.GetMaxTokens() != 512 {
+		t.Fatalf("unset max_tokens = %d, want 512", stub.Budget.GetMaxTokens())
+	}
+
+	t.Setenv("NVIDIA_MODEL", "moonshotai/kimi-k3")
+	t.Setenv("MODEL_MAX_TOKENS", "")
+	def := FromEnv()
+	if def.Model.GetProvider() != "nvidia" || def.Model.GetModel() != "moonshotai/kimi-k3" {
+		t.Fatalf("named model = %s/%s", def.Model.GetProvider(), def.Model.GetModel())
+	}
+	if def.Budget.GetMaxTokens() != 16384 {
+		t.Fatalf("default max_tokens = %d, want 16384", def.Budget.GetMaxTokens())
+	}
+
+	t.Setenv("MODEL_MAX_TOKENS", "2048")
+	capped := FromEnv()
+	if capped.Budget.GetMaxTokens() != 2048 {
+		t.Fatalf("MODEL_MAX_TOKENS = %d, want 2048", capped.Budget.GetMaxTokens())
+	}
+}

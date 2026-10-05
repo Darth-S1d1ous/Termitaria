@@ -1,8 +1,8 @@
 """模型出口（架构 §4 LLM client 的替换点）。
 
-本切片不实现 LLM client：ModelPort 是协议，StubModel 产出确定性的假流式响应，
-用于 M1 链路验收（Go Task → worker → delta/result → MessageAppended）。
-接 Token Factory 时实现同一个 stream() 签名即可，graph / runner 不用动。
+ModelPort 是协议。StubModel 产出确定性假流，供离线测试与未配 key 时的链路验收。
+具体提供商在各自模块里实现（目前是 nvidia.NvidiaModel）；select_model 是唯一装配点。
+graph / runner 只依赖 stream()。
 """
 from __future__ import annotations
 
@@ -30,6 +30,20 @@ class Done:
 
 ModelEvent = Union[Chunk, Done]
 
+# Catalog 示例的默认模型。控制面下发真实模型名时不用它们。
+DEFAULT_MODEL = "moonshotai/kimi-k3"
+DEFAULT_MAX_TOKENS = 16384
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    """一个模型出口的运行参数。有 api_key 才实例化真实提供商。"""
+
+    api_key: str = ""
+    model: str = DEFAULT_MODEL
+    temperature: float = 1.0
+    max_tokens: int = DEFAULT_MAX_TOKENS
+
 
 class ModelPort(Protocol):
     async def stream(
@@ -42,8 +56,7 @@ class ModelPort(Protocol):
     ) -> AsyncIterator[ModelEvent]:
         """流式产出文本增量，最后一个事件必须是 Done(usage)。
 
-        真实实现：OpenAI 兼容 client → Nebius Token Factory。
-        model.model 是唯一权威的模型名（model router 已在 Go 侧解析好档位）。
+        model.model 是 Go 侧解析好的模型名。占位名 stub-model 由具体提供商换成自己的默认模型。
         """
         ...
 
@@ -83,6 +96,21 @@ class StubModel:
                 model=model.model or "stub",
             )
         )
+
+
+def select_model(cfg: ModelConfig | None = None):
+    """有 key 时走 NVIDIA API Catalog，否则 StubModel。"""
+    cfg = cfg or ModelConfig()
+    if not cfg.api_key:
+        return StubModel()
+    from .nvidia import NvidiaModel
+
+    return NvidiaModel(
+        cfg.api_key,
+        default_model=cfg.model,
+        temperature=cfg.temperature,
+        max_completion_tokens=cfg.max_tokens,
+    )
 
 
 def _split_chunks(text: str, n: int) -> list[str]:

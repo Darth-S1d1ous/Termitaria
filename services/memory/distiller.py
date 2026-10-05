@@ -13,7 +13,7 @@ import logging
 
 from termitaria.session.v1 import session_pb2
 
-from services.worker import envelope
+from services.common import envelope
 
 from .config import MemoryConfig
 
