@@ -1470,7 +1470,7 @@
       "conv-50:156",
       "conv-50:157"
     ],
-    "chunking": "One memory per dialogue turn. Text is '[session_date_time] speaker: text' plus an image caption when present. The same string is passed to both memories.",
+    "chunking": "One memory per dialogue turn. Text is '[session_date_time] speaker: text' plus an image caption when present. The same string is passed to every memory.",
     "k": 5
   },
   "react": {
@@ -1480,10 +1480,57 @@
   },
   "ingestion_difference": {
     "shared": "Same turns, same order, same chunk text, same k, same ReAct policy, same questions.",
-    "graph_kuzu": "Kuzu 0.11 stores Utterance and Entity nodes plus MENTIONS and RELATES edges. Entities and SVO relations come from spaCy en_core_web_sm because Mem0/Graphiti extraction needs an LLM. First-person subjects are attached to the speaker. Retrieval is Cypher: match query entities, walk one RELATES hop (skipping hubs), rank utterances by inverse mention-degree. No embedding is used.",
+    "kuzu_memory": "kuzu-memory 1.12 stores each turn with remember() (metadata chunk_id) and recalls with attach_memories(strategy='auto', use_semantic_search=False). That auto path is keyword + entity + temporal + a RELATES_TO hop. MiniLM embedding writes are skipped so the score is not a second vector ranker. The library's entity regex does not extract single given names, and its HAS_KEYWORD graph query is disabled upstream, so on this corpus the public API behaves as a keyword filter plus the library's own ranker. Candidate window is 1000, above the longest conversation, because the library LIMITs before ranking.",
+    "graph_kuzu": "Kuzu 0.11 stores Utterance and Entity nodes plus MENTIONS and RELATES edges. Entities and SVO relations come from spaCy en_core_web_sm because Mem0 and Graphiti extraction needs an LLM, and kuzu-memory's own regex NER misses dialogue names. First-person subjects are attached to the speaker. Retrieval is Cypher: match query entities, walk one RELATES hop (skipping hubs), rank utterances by inverse mention-degree. No embedding is used. This is the graph-traversal arm of the comparison.",
     "poincare": "The same turn text is encoded with sentence-transformers/all-MiniLM-L6-v2. Vectors are mean-pooled token states before the model's L2-normalize layer, then mapped by exp_0(scale * x) with scale=0.2 into the open unit ball. Ranking uses Poincaré ball distance only."
   },
   "systems": {
+    "kuzu_memory": {
+      "name": "kuzu_memory",
+      "k": 5,
+      "question_count": 1444,
+      "evidence_hit_rate": 0.2126038781163435,
+      "evidence_recall_at_k": 0.19340264037286198,
+      "oracle_recall_at_k": 0.9956356385591696,
+      "answer_containment": 0.13721413721413722,
+      "offline_extractive_token_f1": 0.043787204150127795,
+      "search_query_is_question_rate": 1.0,
+      "by_category": {
+        "1": {
+          "name": "multi-hop",
+          "n": 282,
+          "evidence_hit_rate": 0.08865248226950355,
+          "evidence_recall_at_k": 0.032588933918721155,
+          "oracle_recall_at_k": 0.9776519931895072,
+          "answer_containment": 0.04964539007092199
+        },
+        "2": {
+          "name": "temporal",
+          "n": 321,
+          "evidence_hit_rate": 0.18691588785046728,
+          "evidence_recall_at_k": 0.16848390446521289,
+          "oracle_recall_at_k": 1.0,
+          "answer_containment": 0.11526479750778816
+        },
+        "4": {
+          "name": "single-hop",
+          "n": 841,
+          "evidence_hit_rate": 0.26397146254458975,
+          "evidence_recall_at_k": 0.2568370986920333,
+          "oracle_recall_at_k": 1.0,
+          "answer_containment": 0.175
+        }
+      },
+      "timing_seconds": {
+        "ingest_seconds": 40.01636918300005,
+        "answer_seconds": 63.78110274300195
+      },
+      "extra": {
+        "graph_stats_sum": {
+          "memories": 5882
+        }
+      }
+    },
     "graph_kuzu": {
       "name": "graph_kuzu",
       "k": 5,
@@ -1521,8 +1568,8 @@
         }
       },
       "timing_seconds": {
-        "ingest_seconds": 189.71662381599992,
-        "answer_seconds": 13.174956784997221
+        "ingest_seconds": 197.19111919999978,
+        "answer_seconds": 14.036955514001647
       },
       "extra": {
         "graph_stats_sum": {
@@ -1570,8 +1617,8 @@
         }
       },
       "timing_seconds": {
-        "ingest_seconds": 23.32851254900038,
-        "answer_seconds": 6.176638724997247
+        "ingest_seconds": 22.699182014999906,
+        "answer_seconds": 5.974515766002241
       },
       "extra": {
         "radius": {
@@ -1585,203 +1632,401 @@
     }
   },
   "examples": {
-    "graph_hit_poincare_miss": [
-      {
-        "qid": "conv-26:3",
-        "category": "multi-hop",
-        "question": "What did Caroline research?",
-        "answer": "Adoption agencies",
-        "evidence": [
-          "D2:8"
-        ],
-        "graph_ids": [
-          "D2:8",
-          "D17:7",
-          "D17:8",
-          "D1:1",
-          "D1:3"
-        ],
-        "poincare_ids": [
-          "D15:5",
-          "D17:19",
-          "D3:6",
-          "D6:11",
-          "D14:13"
-        ]
-      },
-      {
-        "qid": "conv-26:9",
-        "category": "temporal",
-        "question": "When did Caroline meet up with her friends, family, and mentors?",
-        "answer": "The week before 9 June 2023",
-        "evidence": [
-          "D3:11"
-        ],
-        "graph_ids": [
-          "D3:11",
-          "D2:10",
-          "D6:11",
-          "D19:9",
-          "D6:12"
-        ],
-        "poincare_ids": [
-          "D6:11",
-          "D15:7",
-          "D6:15",
-          "D17:5",
-          "D15:5"
-        ]
-      },
-      {
-        "qid": "conv-26:11",
-        "category": "multi-hop",
-        "question": "Where did Caroline move from 4 years ago?",
-        "answer": "Sweden",
-        "evidence": [
-          "D3:13",
-          "D4:3"
-        ],
-        "graph_ids": [
-          "D3:13",
-          "D3:17",
-          "D3:18",
-          "D8:29",
-          "D1:1"
-        ],
-        "poincare_ids": [
-          "D6:11",
-          "D15:5",
-          "D18:5",
-          "D3:6",
-          "D17:5"
-        ]
-      },
-      {
-        "qid": "conv-26:16",
-        "category": "temporal",
-        "question": "When did Melanie sign up for a pottery class?",
-        "answer": "2 July 2023",
-        "evidence": [
-          "D5:4"
-        ],
-        "graph_ids": [
-          "D5:4",
-          "D14:4",
-          "D5:8",
-          "D2:10",
-          "D11:5"
-        ],
-        "poincare_ids": [
-          "D12:2",
-          "D8:2",
-          "D5:6",
-          "D16:9",
-          "D14:4"
-        ]
-      }
-    ],
-    "poincare_hit_graph_miss": [
-      {
-        "qid": "conv-26:10",
-        "category": "temporal",
-        "question": "How long has Caroline had her current group of friends for?",
-        "answer": "4 years",
-        "evidence": [
-          "D3:13"
-        ],
-        "graph_ids": [
-          "D6:11",
-          "D10:5",
-          "D11:6",
-          "D6:12",
-          "D19:9"
-        ],
-        "poincare_ids": [
-          "D6:11",
-          "D17:5",
-          "D3:13",
-          "D15:5",
-          "D6:15"
-        ]
-      },
-      {
-        "qid": "conv-26:15",
-        "category": "multi-hop",
-        "question": "What activities does Melanie partake in?",
-        "answer": "pottery, camping, painting, swimming",
-        "evidence": [
-          "D5:4",
-          "D9:1",
-          "D1:12",
-          "D1:18"
-        ],
-        "graph_ids": [
-          "D15:10",
-          "D1:1",
-          "D1:2",
-          "D1:4",
-          "D1:6"
-        ],
-        "poincare_ids": [
-          "D3:6",
-          "D2:1",
-          "D17:25",
-          "D5:4",
-          "D3:20"
-        ]
-      },
-      {
-        "qid": "conv-26:18",
-        "category": "multi-hop",
-        "question": "Where has Melanie camped?",
-        "answer": "beach, mountains, forest",
-        "evidence": [
-          "D6:16",
-          "D4:6",
-          "D8:32"
-        ],
-        "graph_ids": [
-          "D9:1",
-          "D16:2",
-          "D18:20",
-          "D1:1",
-          "D1:2"
-        ],
-        "poincare_ids": [
-          "D12:2",
-          "D10:12",
-          "D8:32",
-          "D18:21",
-          "D14:1"
-        ]
-      },
-      {
-        "qid": "conv-26:23",
-        "category": "multi-hop",
-        "question": "What books has Melanie read?",
-        "answer": "\"Nothing is Impossible\", \"Charlotte's Web\"",
-        "evidence": [
-          "D7:8",
-          "D6:10"
-        ],
-        "graph_ids": [
-          "D7:9",
-          "D6:7",
-          "D4:18",
-          "D6:8",
-          "D7:10"
-        ],
-        "poincare_ids": [
-          "D6:10",
-          "D3:6",
-          "D7:8",
-          "D2:17",
-          "D7:10"
-        ]
-      }
-    ],
-    "graph_only_hit_count": 324,
-    "poincare_only_hit_count": 217
+    "kuzu_memory_vs_poincare": {
+      "left": "kuzu_memory",
+      "right": "poincare",
+      "left_only": [
+        {
+          "qid": "conv-26:9",
+          "category": "temporal",
+          "question": "When did Caroline meet up with her friends, family, and mentors?",
+          "answer": "The week before 9 June 2023",
+          "evidence": [
+            "D3:11"
+          ],
+          "left_ids": [
+            "D3:22",
+            "D6:7",
+            "D3:11",
+            "D11:3",
+            "D18:22"
+          ],
+          "right_ids": [
+            "D6:11",
+            "D15:7",
+            "D6:15",
+            "D17:5",
+            "D15:5"
+          ]
+        },
+        {
+          "qid": "conv-26:36",
+          "category": "temporal",
+          "question": "When did Caroline join a mentorship program?",
+          "answer": "The weekend before 17 July 2023",
+          "evidence": [
+            "D9:2"
+          ],
+          "left_ids": [
+            "D8:18",
+            "D9:10",
+            "D18:17",
+            "D9:2",
+            "D15:13"
+          ],
+          "right_ids": [
+            "D9:4",
+            "D4:11",
+            "D7:7",
+            "D15:9",
+            "D19:9"
+          ]
+        },
+        {
+          "qid": "conv-26:76",
+          "category": "multi-hop",
+          "question": "When did Melanie go on a hike after the roadtrip?",
+          "answer": "19 October 2023",
+          "evidence": [
+            "D18:17"
+          ],
+          "left_ids": [
+            "D18:17",
+            "D2:3",
+            "D18:18",
+            "D1:15",
+            "D12:16"
+          ],
+          "right_ids": [
+            "D18:1",
+            "D14:1",
+            "D12:2",
+            "D18:15",
+            "D18:3"
+          ]
+        },
+        {
+          "qid": "conv-26:107",
+          "category": "single-hop",
+          "question": "What is Melanie's reason for getting into running?",
+          "answer": "To de-stress and clear her mind",
+          "evidence": [
+            "D7:21"
+          ],
+          "left_ids": [
+            "D7:21",
+            "D12:5",
+            "D7:19",
+            "D9:7",
+            "D13:14"
+          ],
+          "right_ids": [
+            "D2:1",
+            "D3:6",
+            "D18:1",
+            "D7:22",
+            "D19:9"
+          ]
+        }
+      ],
+      "right_only": [
+        {
+          "qid": "conv-26:5",
+          "category": "temporal",
+          "question": "When did Melanie run a charity race?",
+          "answer": "The sunday before 25 May 2023",
+          "evidence": [
+            "D2:1"
+          ],
+          "left_ids": [
+            "D14:30",
+            "D18:17",
+            "D13:8",
+            "D11:5",
+            "D15:26"
+          ],
+          "right_ids": [
+            "D2:1",
+            "D2:2",
+            "D12:2",
+            "D3:6",
+            "D10:5"
+          ]
+        },
+        {
+          "qid": "conv-26:6",
+          "category": "temporal",
+          "question": "When is Melanie planning on going camping?",
+          "answer": "June 2023",
+          "evidence": [
+            "D2:7"
+          ],
+          "left_ids": [
+            "D19:14",
+            "D14:3",
+            "D1:13",
+            "D11:3",
+            "D9:4"
+          ],
+          "right_ids": [
+            "D10:12",
+            "D2:7",
+            "D18:21",
+            "D4:6",
+            "D8:32"
+          ]
+        },
+        {
+          "qid": "conv-26:10",
+          "category": "temporal",
+          "question": "How long has Caroline had her current group of friends for?",
+          "answer": "4 years",
+          "evidence": [
+            "D3:13"
+          ],
+          "left_ids": [
+            "D3:12",
+            "D8:27",
+            "D12:15",
+            "D6:11",
+            "D6:1"
+          ],
+          "right_ids": [
+            "D6:11",
+            "D17:5",
+            "D3:13",
+            "D15:5",
+            "D6:15"
+          ]
+        },
+        {
+          "qid": "conv-26:12",
+          "category": "temporal",
+          "question": "How long ago was Caroline's 18th birthday?",
+          "answer": "10 years ago",
+          "evidence": [
+            "D4:5"
+          ],
+          "left_ids": [
+            "D3:15",
+            "D3:19",
+            "D4:7",
+            "D3:12",
+            "D16:7"
+          ],
+          "right_ids": [
+            "D11:1",
+            "D15:5",
+            "D6:11",
+            "D17:5",
+            "D4:5"
+          ]
+        }
+      ],
+      "left_only_count": 133,
+      "right_only_count": 525
+    },
+    "graph_kuzu_vs_poincare": {
+      "left": "graph_kuzu",
+      "right": "poincare",
+      "left_only": [
+        {
+          "qid": "conv-26:3",
+          "category": "multi-hop",
+          "question": "What did Caroline research?",
+          "answer": "Adoption agencies",
+          "evidence": [
+            "D2:8"
+          ],
+          "left_ids": [
+            "D2:8",
+            "D17:7",
+            "D17:8",
+            "D1:1",
+            "D1:3"
+          ],
+          "right_ids": [
+            "D15:5",
+            "D17:19",
+            "D3:6",
+            "D6:11",
+            "D14:13"
+          ]
+        },
+        {
+          "qid": "conv-26:9",
+          "category": "temporal",
+          "question": "When did Caroline meet up with her friends, family, and mentors?",
+          "answer": "The week before 9 June 2023",
+          "evidence": [
+            "D3:11"
+          ],
+          "left_ids": [
+            "D3:11",
+            "D2:10",
+            "D6:11",
+            "D19:9",
+            "D6:12"
+          ],
+          "right_ids": [
+            "D6:11",
+            "D15:7",
+            "D6:15",
+            "D17:5",
+            "D15:5"
+          ]
+        },
+        {
+          "qid": "conv-26:11",
+          "category": "multi-hop",
+          "question": "Where did Caroline move from 4 years ago?",
+          "answer": "Sweden",
+          "evidence": [
+            "D3:13",
+            "D4:3"
+          ],
+          "left_ids": [
+            "D3:13",
+            "D3:17",
+            "D3:18",
+            "D8:29",
+            "D1:1"
+          ],
+          "right_ids": [
+            "D6:11",
+            "D15:5",
+            "D18:5",
+            "D3:6",
+            "D17:5"
+          ]
+        },
+        {
+          "qid": "conv-26:16",
+          "category": "temporal",
+          "question": "When did Melanie sign up for a pottery class?",
+          "answer": "2 July 2023",
+          "evidence": [
+            "D5:4"
+          ],
+          "left_ids": [
+            "D5:4",
+            "D14:4",
+            "D5:8",
+            "D2:10",
+            "D11:5"
+          ],
+          "right_ids": [
+            "D12:2",
+            "D8:2",
+            "D5:6",
+            "D16:9",
+            "D14:4"
+          ]
+        }
+      ],
+      "right_only": [
+        {
+          "qid": "conv-26:10",
+          "category": "temporal",
+          "question": "How long has Caroline had her current group of friends for?",
+          "answer": "4 years",
+          "evidence": [
+            "D3:13"
+          ],
+          "left_ids": [
+            "D6:11",
+            "D10:5",
+            "D11:6",
+            "D6:12",
+            "D19:9"
+          ],
+          "right_ids": [
+            "D6:11",
+            "D17:5",
+            "D3:13",
+            "D15:5",
+            "D6:15"
+          ]
+        },
+        {
+          "qid": "conv-26:15",
+          "category": "multi-hop",
+          "question": "What activities does Melanie partake in?",
+          "answer": "pottery, camping, painting, swimming",
+          "evidence": [
+            "D5:4",
+            "D9:1",
+            "D1:12",
+            "D1:18"
+          ],
+          "left_ids": [
+            "D15:10",
+            "D1:1",
+            "D1:2",
+            "D1:4",
+            "D1:6"
+          ],
+          "right_ids": [
+            "D3:6",
+            "D2:1",
+            "D17:25",
+            "D5:4",
+            "D3:20"
+          ]
+        },
+        {
+          "qid": "conv-26:18",
+          "category": "multi-hop",
+          "question": "Where has Melanie camped?",
+          "answer": "beach, mountains, forest",
+          "evidence": [
+            "D6:16",
+            "D4:6",
+            "D8:32"
+          ],
+          "left_ids": [
+            "D9:1",
+            "D16:2",
+            "D18:20",
+            "D1:1",
+            "D1:2"
+          ],
+          "right_ids": [
+            "D12:2",
+            "D10:12",
+            "D8:32",
+            "D18:21",
+            "D14:1"
+          ]
+        },
+        {
+          "qid": "conv-26:23",
+          "category": "multi-hop",
+          "question": "What books has Melanie read?",
+          "answer": "\"Nothing is Impossible\", \"Charlotte's Web\"",
+          "evidence": [
+            "D7:8",
+            "D6:10"
+          ],
+          "left_ids": [
+            "D7:9",
+            "D6:7",
+            "D4:18",
+            "D6:8",
+            "D7:10"
+          ],
+          "right_ids": [
+            "D6:10",
+            "D3:6",
+            "D7:8",
+            "D2:17",
+            "D7:10"
+          ]
+        }
+      ],
+      "left_only_count": 324,
+      "right_only_count": 217
+    }
   },
-  "interpretation": "Winner on the primary retrieval metrics: graph_kuzu. evidence hit@5 graph=0.558 poincare=0.484; evidence recall@5 graph=0.501 poincare=0.422. The Kuzu graph did better overall, mostly on single-hop and temporal questions. Those questions repeat a person and a concrete event that the offline extractor stored as entity nodes, so inverse-degree ranking over MENTIONS edges finds the evidence turn. Poincaré distance is ahead on multi-hop questions, where the wording drifts away from any single turn. RELATES edges are real, but they are sparse next to MENTIONS, so one-hop expansion is not the main source of the gap. On the same vectors, mean top-5 Jaccard between Poincaré rank and cosine rank is 0.335, so the ball distance is not a rename of cosine. By category: multi-hop hit graph=0.436 poincare=0.479 (poincare); temporal hit graph=0.632 poincare=0.573 (graph_kuzu); single-hop hit graph=0.571 poincare=0.452 (graph_kuzu). Offline extraction produced 2295 RELATES edges and 70229 MENTIONS edges for 5882 turns, so many graph hits are direct entity mentions rather than multi-hop paths. Answer-string containment is secondary: many gold answers are abstractive (especially temporal dates inferred from 'yesterday' plus the session timestamp) and do not appear verbatim even in the gold turns."
+  "interpretation": "Open-source module versus Poincaré: winner poincare. evidence hit@5 kuzu_memory=0.213 poincare=0.484; evidence recall@5 kuzu_memory=0.193 poincare=0.422. kuzu-memory is called through remember/attach_memories with semantic search off. Its entity patterns do not pick up single given names and its keyword graph query is disabled, so this number is the library's keyword filter plus its own ranker. Structural graph versus Poincaré: winner graph_kuzu. evidence hit@5 graph_kuzu=0.558 poincare=0.484; evidence recall@5 graph_kuzu=0.501 poincare=0.422. The structural graph ranks turns by inverse mention-degree over MENTIONS edges and one RELATES hop. That is the graph-traversal comparison. Poincaré distance is the hyperbolic distance inside the open unit ball after exp_0, and it is ahead when the question paraphrases the evidence turn. On the same vectors, mean top-5 Jaccard between Poincaré rank and cosine rank is 0.335, so the ball distance is not a rename of cosine. By category: multi-hop hit kuzu_memory=0.089 graph_kuzu=0.436 poincare=0.479; temporal hit kuzu_memory=0.187 graph_kuzu=0.632 poincare=0.573; single-hop hit kuzu_memory=0.264 graph_kuzu=0.571 poincare=0.452. Offline extraction produced 2295 RELATES edges and 70229 MENTIONS edges for 5882 turns, so many structural-graph hits are direct entity mentions rather than multi-hop paths. Answer-string containment is secondary: many gold answers are abstractive (especially temporal dates inferred from 'yesterday' plus the session timestamp) and do not appear verbatim even in the gold turns."
 }
