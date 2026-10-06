@@ -14,7 +14,13 @@
 
 ## 环境
 
-Python 3.10+。图抽取用 spaCy `en_core_web_sm`（离线）。
+Python 3.11 或以上。`numpy==2.4.4` 和 `kuzu-memory` 都不支持 3.10。图抽取用 spaCy `en_core_web_sm`（离线）。系统自带的 `python3` 如果是 3.10，先开一个 3.11 环境再安装：
+
+```bash
+conda create -n termitaria python=3.11 -y
+conda activate termitaria
+python -m pip install -r requirements.txt
+```
 
 没有 `OPENAI_API_KEY` 或 `LLM_API_KEY` 时，ReAct 走确定性的离线策略：用原问题调用一次 `search_memory`，再把排名第一的记忆当作抽取式回答。主指标是这次检索的 evidence hit@k 和 evidence recall@k，不依赖付费模型。设置了 key 之后，同一个循环会改用 OpenAI 兼容的 chat completions（`OPENAI_BASE_URL`、`OPENAI_MODEL` 可选）。
 

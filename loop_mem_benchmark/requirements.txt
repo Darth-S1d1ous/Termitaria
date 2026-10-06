@@ -1,5 +1,5 @@
+# Python >= 3.11. numpy 2.4.4 and every kuzu-memory release reject 3.10.
 # torch==2.14.1+cpu exists only on the Linux CPU wheel index and has no macOS build.
-# 2.14.1 is the same release on PyPI, including the macOS wheel.
 torch==2.14.1
 numpy==2.4.4
 kuzu==0.11.3
