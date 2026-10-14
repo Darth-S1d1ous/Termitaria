@@ -17,3 +17,9 @@ node_modules/
 
 # example and temporary files
 *.example
+
+# local client state (projects and user-visible chats)
+data/
+
+crewAI
+loop_mem_benchmark

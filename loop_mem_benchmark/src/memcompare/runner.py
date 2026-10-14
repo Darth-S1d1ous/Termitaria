@@ -30,8 +30,9 @@ from memcompare.metrics import (
     token_f1,
 )
 from memcompare.poincare import PROJECTION_SCALE
-from memcompare.poincare_memory import PoincareMemory, _MODEL
+from memcompare.poincare_memory import MiniLMEncoder, PoincareMemory, _MODEL
 from memcompare.react import ReActAgent, build_client
+from memcompare.vector_rag import VectorRagMemory
 
 K_DEFAULT = 5
 
@@ -60,10 +61,19 @@ def run(argv: list[str] | None = None) -> dict:
         out_dir = _repo_root() / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    encoder: MiniLMEncoder | None = None
+
+    def shared_encoder() -> MiniLMEncoder:
+        nonlocal encoder
+        if encoder is None:
+            encoder = MiniLMEncoder()
+        return encoder
+
     systems = [
         ("kuzu_memory", lambda: KuzuOpenMemory()),
         ("graph_kuzu", lambda: GraphMemory()),
-        ("poincare", lambda: PoincareMemory()),
+        ("vector_rag", lambda: VectorRagMemory(shared_encoder())),
+        ("poincare", lambda: PoincareMemory(shared_encoder())),
     ]
     reports = []
     per_question_rows = []
@@ -209,6 +219,7 @@ def _comparison(conversations, questions: list[QAItem], reports, rows, client_mo
     examples = {
         "kuzu_memory_vs_poincare": _examples(rows, "kuzu_memory", "poincare"),
         "graph_kuzu_vs_poincare": _examples(rows, "graph_kuzu", "poincare"),
+        "vector_rag_vs_poincare": _examples(rows, "vector_rag", "poincare"),
     }
     return {
         "dataset": {
@@ -266,8 +277,14 @@ def _comparison(conversations, questions: list[QAItem], reports, rows, client_mo
                 "rank utterances by inverse mention-degree. No embedding is used. "
                 "This is the graph-traversal arm of the comparison."
             ),
-            "poincare": (
+            "vector_rag": (
                 f"The same turn text is encoded with {_MODEL}. "
+                "Vectors are the mean-pooled token states, then L2-normalized. "
+                "That is the model's own normalize layer. Ranking is cosine, which on unit vectors "
+                "is the dot product. No graph and no hyperbolic projection."
+            ),
+            "poincare": (
+                f"The same turn text is encoded with {_MODEL}, sharing the vector_rag encoder. "
                 "Vectors are mean-pooled token states before the model's L2-normalize layer, "
                 f"then mapped by exp_0(scale * x) with scale={PROJECTION_SCALE} into the open unit ball. "
                 "Ranking uses Poincaré ball distance only."
@@ -331,9 +348,21 @@ def _interpret(systems: dict[str, dict]) -> str:
     kuzu = systems["kuzu_memory"]
     graph = systems["graph_kuzu"]
     poincare = systems["poincare"]
+    vector = systems.get("vector_rag")
     k = graph["k"]
     oss_winner = _winner(kuzu, poincare)
     graph_winner = _winner(graph, poincare)
+    vector_bit = ""
+    if vector is not None:
+        vector_winner = _winner(vector, poincare)
+        vector_bit = (
+            f" Cosine RAG versus Poincaré: winner {vector_winner}. "
+            f"evidence hit@{k} vector_rag={vector['evidence_hit_rate']:.3f} "
+            f"poincare={poincare['evidence_hit_rate']:.3f}; "
+            f"evidence recall@{k} vector_rag={vector['evidence_recall_at_k']:.3f} "
+            f"poincare={poincare['evidence_recall_at_k']:.3f}. "
+            "vector_rag is L2-normalized MiniLM cosine on the same turn strings."
+        )
     cosine = (poincare.get("extra") or {}).get("cosine_jaccard_mean")
     cosine_bit = ""
     if cosine is not None:
@@ -345,7 +374,9 @@ def _interpret(systems: dict[str, dict]) -> str:
     for cat in sorted(graph["by_category"], key=int):
         name = graph["by_category"][cat]["name"]
         bits = []
-        for system in (kuzu, graph, poincare):
+        for system in (kuzu, graph, vector, poincare):
+            if system is None:
+                continue
             rate = system["by_category"][cat]["evidence_hit_rate"]
             bits.append(f"{system['name']}={rate:.3f}")
         category_bits.append(f"{name} hit " + " ".join(bits))
@@ -375,7 +406,7 @@ def _interpret(systems: dict[str, dict]) -> str:
         "RELATES hop. That is the graph-traversal comparison. Poincaré distance is the hyperbolic "
         "distance inside the open unit ball after exp_0, and it is ahead when the question "
         "paraphrases the evidence turn."
-        f"{cosine_bit} By category: " + "; ".join(category_bits) + "."
+        f"{vector_bit}{cosine_bit} By category: " + "; ".join(category_bits) + "."
         f"{density} "
         "Answer-string containment is secondary: many gold answers are abstractive "
         "(especially temporal dates inferred from 'yesterday' plus the session timestamp) "
@@ -383,7 +414,7 @@ def _interpret(systems: dict[str, dict]) -> str:
     )
 
 
-_SYSTEM_ORDER = ("kuzu_memory", "graph_kuzu", "poincare")
+_SYSTEM_ORDER = ("kuzu_memory", "graph_kuzu", "vector_rag", "poincare")
 
 
 def _markdown(comparison: dict) -> str:
@@ -391,7 +422,7 @@ def _markdown(comparison: dict) -> str:
     systems = comparison["systems"]
     ordered = [systems[name] for name in _SYSTEM_ORDER if name in systems]
     lines = [
-        "# LoCoMo 记忆对比：kuzu-memory、实体图、Poincaré 球距离",
+        "# LoCoMo 记忆对比：kuzu-memory、实体图、余弦 RAG、Poincaré 球距离",
         "",
         _chinese_summary(comparison),
         "",
@@ -477,6 +508,7 @@ def _markdown(comparison: dict) -> str:
     labels = {
         "kuzu_memory_vs_poincare": "kuzu-memory 与 Poincaré",
         "graph_kuzu_vs_poincare": "实体图与 Poincaré",
+        "vector_rag_vs_poincare": "余弦 RAG 与 Poincaré",
     }
     for key, title in labels.items():
         pair = comparison["examples"][key]
@@ -504,9 +536,19 @@ def _chinese_summary(comparison: dict) -> str:
     kuzu = systems["kuzu_memory"]
     graph = systems["graph_kuzu"]
     poincare = systems["poincare"]
+    vector = systems.get("vector_rag")
     k = kuzu["k"]
     oss = _winner(kuzu, poincare)
     structural = _winner(graph, poincare)
+    vector_sentence = ""
+    if vector is not None:
+        vector_winner = _winner(vector, poincare)
+        vector_sentence = (
+            f"余弦 RAG 对 Poincaré 的胜者是 {vector_winner}："
+            f"hit@{k} {vector['evidence_hit_rate']:.3f} 对 {poincare['evidence_hit_rate']:.3f}，"
+            f"recall@{k} {vector['evidence_recall_at_k']:.3f} 对 {poincare['evidence_recall_at_k']:.3f}。"
+            "余弦 RAG 用同一段原文的 MiniLM 向量，L2 归一化后按余弦取 top-k。"
+        )
     return (
         f"同一套 ReAct、同一批 LoCoMo 题。开源模块 kuzu-memory 对 Poincaré 的主指标胜者是 {oss}："
         f"evidence hit@{k} 为 {kuzu['evidence_hit_rate']:.3f} 对 {poincare['evidence_hit_rate']:.3f}，"
@@ -514,6 +556,7 @@ def _chinese_summary(comparison: dict) -> str:
         f"实体关系图对 Poincaré 的胜者是 {structural}："
         f"hit@{k} {graph['evidence_hit_rate']:.3f} 对 {poincare['evidence_hit_rate']:.3f}，"
         f"recall@{k} {graph['evidence_recall_at_k']:.3f} 对 {poincare['evidence_recall_at_k']:.3f}。"
+        f"{vector_sentence}"
         "kuzu-memory 走的是它自己的 attach_memories，语义向量检索关掉。"
         "它的实体正则认不出单独的人名，关键词图查询在库里是关的，所以这条分数主要是关键词过滤加它自己的排序。"
         "实体图才是按 MENTIONS 边和一跳 RELATES 做的图遍历，用来和庞加莱球距离对照。"

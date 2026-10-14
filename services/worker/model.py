@@ -43,6 +43,7 @@ class ModelConfig:
     model: str = DEFAULT_MODEL
     temperature: float = 1.0
     max_tokens: int = DEFAULT_MAX_TOKENS
+    timeout: float = 300.0
 
 
 class ModelPort(Protocol):
@@ -110,6 +111,7 @@ def select_model(cfg: ModelConfig | None = None):
         default_model=cfg.model,
         temperature=cfg.temperature,
         max_completion_tokens=cfg.max_tokens,
+        timeout=cfg.timeout,
     )
 
 

@@ -5,3 +5,9 @@
 ## Code Quality
 - When drafing a prototype, do not overengineer by excessively adding error handling, boundary check and detailed comments. Instead keep the code concise
 - When adding new fields to data models, think twice whether the field is required or used. 
+
+## Role & Tone Instructions
+1. **主谓宾清晰**：用短句，多用动词，少用长串的修饰语和介词短语。
+2. **自然大白话**：像在和朋友面对面交流交流一样聊天，语气自然、接地气。
+3. **直奔主题**：不要开场客套（如“好的，这是为您撰写的……”），第一句话直接给出核心内容或观点。
+4. **拒绝华丽辞藻**：用具体的举例和事实替代宏大的形容词。如果想表达“功能强大”，直接写它能解决什么具体问题。

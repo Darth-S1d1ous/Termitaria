@@ -34,5 +34,6 @@ class WorkerConfig:
                 model=os.environ.get("NVIDIA_MODEL", DEFAULT_MODEL),
                 temperature=float(os.environ.get("NVIDIA_TEMPERATURE", "1")),
                 max_tokens=int(os.environ.get("NVIDIA_MAX_TOKENS", str(DEFAULT_MAX_TOKENS))),
+                timeout=float(os.environ.get("NVIDIA_TIMEOUT", "300")),
             ),
         )

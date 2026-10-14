@@ -24,12 +24,14 @@ class NvidiaModel:
         default_model: str = DEFAULT_MODEL,
         temperature: float = 1.0,
         max_completion_tokens: int = DEFAULT_MAX_TOKENS,
+        timeout: float = 300.0,
         client_factory: Callable | None = None,
     ) -> None:
         self._api_key = api_key
         self._default_model = default_model or DEFAULT_MODEL
         self._temperature = temperature
         self._max_completion_tokens = max_completion_tokens or DEFAULT_MAX_TOKENS
+        self._timeout = timeout
         self._client_factory = client_factory or _chat_nvidia
         # ChatNVIDIA 初始化会拉一次模型列表，按 (模型, 长度, 温度) 复用客户端。
         self._clients: dict[tuple[str, int, float], object] = {}
@@ -78,7 +80,7 @@ class NvidiaModel:
         return name, max_tokens or self._max_completion_tokens
 
     def _client(self, name: str, limit: int):
-        key = (name, limit, self._temperature)
+        key = (name, limit, self._temperature, self._timeout)
         client = self._clients.get(key)
         if client is None:
             client = self._client_factory(
@@ -86,6 +88,7 @@ class NvidiaModel:
                 api_key=self._api_key,
                 temperature=self._temperature,
                 max_completion_tokens=limit,
+                timeout=self._timeout,
             )
             self._clients[key] = client
         return client

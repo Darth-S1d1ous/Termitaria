@@ -61,6 +61,7 @@ def test_placeholder_model_uses_nvidia_defaults():
         "api_key": "test-key",
         "temperature": 1.0,
         "max_completion_tokens": 16384,
+        "timeout": 300.0,
     }
     assert client.messages == [
         {"role": "system", "content": "you are ideator"},
