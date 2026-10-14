@@ -9,9 +9,11 @@ import (
 	"time"
 
 	commonv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/common/v1"
+	memoryv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/memory/v1"
 	sessionv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/session/v1"
 	taskv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/task/v1"
 	"github.com/Darth-S1d1ous/Termitaria/internal/bus"
+	"github.com/Darth-S1d1ous/Termitaria/internal/live"
 	"github.com/Darth-S1d1ous/Termitaria/internal/session"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -23,6 +25,9 @@ const producer = "dispatcher"
 type AgentConfig struct {
 	Model  *commonv1.ModelRef
 	Budget *commonv1.Budget
+	// RolePrompt 是 SwarmSpec 的角色设定。MemoryService 未接，
+	// 由 dispatcher 作为 ROLE 记忆注入 task（worker 的 recalled 优先于 fallback）。
+	RolePrompt string
 }
 
 type AgentRegistry interface {
@@ -48,7 +53,10 @@ type Dispatcher struct {
 
 	cc     jetstream.ConsumeContext
 	resSub *nats.Subscription
+	hub    *live.Hub
 }
+
+func (d *Dispatcher) SetHub(h *live.Hub) { d.hub = h }
 
 func New(b *bus.Bus, sessions *session.Manager, registry AgentRegistry, windowLimit int) *Dispatcher {
 	return &Dispatcher{
@@ -153,22 +161,39 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 		return nil
 	}
 	taskID := "t_" + strings.TrimPrefix(triggerID, "m_")
+	context := &taskv1.TaskContext{
+		Window: snap.Window,
+		// graph_node_ids 留空：MemoryService 未接，契约已预留（contracts §4 自包含）。
+	}
+	if cfg.RolePrompt != "" {
+		context.Recalled = []*memoryv1.MemoryItem{{
+			ItemId:  "role:" + agentID,
+			AgentId: agentID,
+			Kind:    memoryv1.MemoryKind_MEMORY_KIND_ROLE,
+			Text:    cfg.RolePrompt,
+		}}
+	}
 	task := &taskv1.Task{
 		TaskId:           taskID,
 		SwarmId:          ev.GetSwarmId(),
 		AgentId:          agentID,
 		SessionId:        sess.GetSessionId(),
 		TriggerMessageId: triggerID,
-		Context: &taskv1.TaskContext{
-			Window: snap.Window,
-			// recalled / graph_node_ids 留空：MemoryService 未接，契约已预留（contracts §4 自包含）。
-		},
-		Budget:       cfg.Budget,
-		Model:        cfg.Model,
-		DeltaSubject: bus.TaskDelta(ev.GetSwarmId(), taskID),
-		EnqueuedAtMs: time.Now().UnixMilli(),
+		Context:          context,
+		Budget:           cfg.Budget,
+		Model:            cfg.Model,
+		DeltaSubject:     bus.TaskDelta(ev.GetSwarmId(), taskID),
+		EnqueuedAtMs:     time.Now().UnixMilli(),
+	}
+	if d.hub != nil {
+		d.hub.Track(live.TaskMeta{
+			TaskID: taskID, SessionID: sess.GetSessionId(), AgentID: agentID, SwarmID: ev.GetSwarmId(),
+		})
 	}
 	if _, err := d.bus.Publish(ctx, bus.TaskQueue(ev.GetSwarmId(), agentID), producer, traceID, task); err != nil {
+		if d.hub != nil {
+			d.hub.Finish(taskID)
+		}
 		return fmt.Errorf("enqueue task: %w", err)
 	}
 	d.triggered[triggerID] = taskID
@@ -201,6 +226,9 @@ func (d *Dispatcher) onTaskResult(msg *nats.Msg) {
 	if err != nil {
 		log.Printf("unparseable task result, drop: %v", err)
 		return // core NATS 无重投，坏消息直接丢
+	}
+	if d.hub != nil {
+		d.hub.Finish(result.GetTaskId())
 	}
 	if result.GetStatus() != taskv1.TaskStatus_TASK_STATUS_COMPLETED {
 		// FAILED / CANCELLED：MVP 不落消息。

@@ -57,7 +57,7 @@ def test_placeholder_model_uses_nvidia_defaults():
 
     client = holder["client"]
     assert client.kwargs == {
-        "model": "moonshotai/kimi-k3",
+        "model": "deepseek-ai/deepseek-v4.1-flash",
         "api_key": "test-key",
         "temperature": 1.0,
         "max_completion_tokens": 16384,
@@ -72,7 +72,7 @@ def test_placeholder_model_uses_nvidia_defaults():
     assert isinstance(done, Done)
     assert done.usage.prompt_tokens == 3
     assert done.usage.completion_tokens == 4
-    assert done.usage.model == "moonshotai/kimi-k3"
+    assert done.usage.model == "deepseek-ai/deepseek-v4.1-flash"
 
 
 def test_explicit_model_keeps_task_budget():
@@ -87,10 +87,10 @@ def test_explicit_model_keeps_task_budget():
         model,
         system="",
         window=[("a", "hi")],
-        model=_ref("moonshotai/kimi-k3"),
+        model=_ref("deepseek-ai/deepseek-v4.1-flash"),
         max_tokens=1024,
     )
-    assert seen["model"] == "moonshotai/kimi-k3"
+    assert seen["model"] == "deepseek-ai/deepseek-v4.1-flash"
     assert seen["max_completion_tokens"] == 1024
     assert seen["temperature"] == 0.2
 

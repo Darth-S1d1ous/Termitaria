@@ -31,7 +31,8 @@ class Done:
 ModelEvent = Union[Chunk, Done]
 
 # Catalog 示例的默认模型。控制面下发真实模型名时不用它们。
-DEFAULT_MODEL = "moonshotai/kimi-k3"
+# deepseek-v4.1-flash：TTFB ~1 分钟；kimi-k3 在 Catalog 排队 2-3 分钟，先不用。
+DEFAULT_MODEL = "deepseek-ai/deepseek-v4.1-flash"
 DEFAULT_MAX_TOKENS = 16384
 
 

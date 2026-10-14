@@ -27,6 +27,7 @@ _HEARTBEAT_S = 10.0
 
 class AgentConsumer:
     def __init__(self, nc, agent_id: str, runner: TaskRunner, cfg: WorkerConfig) -> None:
+        self._nc = nc
         self._js = nc.jetstream()
         self._agent_id = agent_id
         self._runner = runner
@@ -39,6 +40,14 @@ class AgentConsumer:
         return f"worker-{self._agent_id}"
 
     async def run(self) -> None:
+        # presence 不进 JetStream。Gateway 收到后改成 WebSocket 帧。
+        await self._nc.publish(f"presence.{self._agent_id}", b"online")
+        try:
+            await self._loop()
+        finally:
+            await self._nc.publish(f"presence.{self._agent_id}", b"offline")
+
+    async def _loop(self) -> None:
         sub = await self._js.pull_subscribe(
             f"tasks.*.{self._agent_id}", durable=self.durable, stream=_STREAM
         )
@@ -47,7 +56,8 @@ class AgentConsumer:
         while True:
             try:
                 msgs = await sub.fetch(self._cfg.concurrency, timeout=self._cfg.fetch_timeout_s)
-            except nats.errors.TimeoutError:
+            except (nats.errors.TimeoutError, asyncio.TimeoutError):
+                # nats.py 新版抛 asyncio.TimeoutError（= 内建 TimeoutError），旧版抛 nats.errors.TimeoutError
                 continue
             for msg in msgs:
                 await self._sem.acquire()

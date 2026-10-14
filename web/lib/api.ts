@@ -1,6 +1,10 @@
-import type { Chat, ChatMessage, Project } from "./types";
+import type { Chat, ChatMessage, Project, Topology } from "./types";
 
 const API = process.env.NEXT_PUBLIC_CLIENT_API ?? "http://127.0.0.1:8787";
+
+export function liveSocketURL(projectId: string) {
+  return `${API.replace(/^http/, "ws")}/api/ws?project=${encodeURIComponent(projectId)}`;
+}
 
 export async function api<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
   const res = await fetch(`${API}${path}`, {
@@ -32,6 +36,10 @@ export function deleteProject(projectId: string) {
 
 export function loadChats(projectId: string) {
   return api<{ chats: Chat[] }>(`/api/projects/${projectId}/chats`);
+}
+
+export function loadTopology(projectId: string) {
+  return api<Topology>(`/api/projects/${projectId}/topology`);
 }
 
 export function loadMessages(projectId: string, chatId: string) {

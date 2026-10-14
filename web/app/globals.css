@@ -71,7 +71,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   width: 100%;
   overflow: auto;
   flex: 1;
-  padding: 0 10px;
+  /* 选中圈向外扩 4px，留出空隙，避免被滚动容器裁进上面的 T 按钮。 */
+  padding: 8px 10px;
 }
 
 .mark, .rail-btn, .project-btn, .icon-btn, .send, .primary, .text-btn {
@@ -271,6 +272,27 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 .avatar.sm { width: 42px; height: 42px; font-size: 14px; }
 
+.avatar svg { width: 62%; height: 62%; }
+
+.roster-agent { position: relative; display: inline-flex; }
+
+.roster-agent .avatar.sm { width: 28px; height: 28px; }
+
+.pip {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid white;
+  background: #98a2ab;
+}
+
+.pip.online { background: #3d9a4a; }
+.pip.thinking { background: #e5ca77; }
+.pip.offline { background: #98a2ab; }
+
 .chat-main { min-width: 0; flex: 1; padding: 2px 0; }
 
 .chat-topline, .chat-subline {
@@ -330,7 +352,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 .msg.user { align-self: flex-end; }
 
-.msg.agent { align-self: flex-start; }
+.msg.agent {
+  align-self: flex-start;
+  flex-direction: column;
+  align-items: flex-start;
+}
 
 .bubble {
   position: relative;
@@ -456,7 +482,93 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   color: var(--danger);
 }
 
-.blank { background: var(--bg); }
+.blank {
+  display: flex;
+  height: 100%;
+  background: var(--bg);
+}
+
+.conv-header { flex-wrap: wrap; }
+
+.roster {
+  flex-basis: 100%;
+  display: flex;
+  gap: 6px;
+}
+
+.dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: white;
+  background: #98a2ab;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.dot.online { background: #7bc862; }
+.dot.thinking { background: #e5ca77; color: #3d3420; }
+.dot.offline { background: #98a2ab; }
+
+.avatar.channel {
+  background: #65aadd;
+  color: white;
+  font-weight: 700;
+}
+
+.msg-name {
+  margin: 0 0 2px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.focus-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 8px 16px;
+  background: #eef6fb;
+  color: var(--ink);
+}
+
+.composer { flex-wrap: wrap; }
+
+.mention-chip, .mention-list { flex-basis: 100%; }
+
+.mention-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.mention-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mention-list button, .focus-bar button, .mention-chip button {
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: var(--hover);
+}
+
+.swarm { align-items: center; justify-content: center; }
+.swarm svg { width: min(560px, 100%); }
+
+.mesh-edge { stroke: #65aadd; stroke-width: 8; cursor: pointer; }
+.mesh-edge.active { stroke: #e17076; }
+.mesh-initials { fill: white; font-size: 14px; font-weight: 700; }
+.mesh-name { fill: var(--ink); font-size: 13px; }
+.mesh-presence { stroke: white; stroke-width: 2; }
+.mesh-presence.online { fill: #7bc862; }
+.mesh-presence.thinking { fill: #e5ca77; }
+.mesh-presence.offline { fill: #98a2ab; }
 
 .builder {
   display: flex;
@@ -533,9 +645,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
     padding: 0 8px;
   }
 
-  .rail-scroll, .rail-tools { flex-direction: row; flex: initial; width: auto; padding: 0; }
+  .rail-scroll, .rail-tools { flex-direction: row; flex: initial; width: auto; }
 
-  .rail-scroll { flex: 1; }
+  .rail-scroll { flex: 1; padding: 0 8px; }
 
   .chat-list, .conversation, .builder, .blank { grid-row: 2; }
 

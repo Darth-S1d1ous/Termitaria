@@ -37,3 +37,14 @@ const (
 )
 
 const TaskResultAll = "tasks.*.result.*"
+
+// TaskDeltaAll 是全部流式增量（core NATS）。Gateway 转成 message.delta。
+const TaskDeltaAll = "tasks.*.delta.*"
+
+// PresenceSubject 是 worker 上下线信号（core NATS，不进 JetStream）。
+// 契约规定 presence 不落 bus；这里只作进程间瞬时信号，Gateway 再扇出到 WS。
+func PresenceSubject(agentID string) string {
+	return fmt.Sprintf("presence.%s", agentID)
+}
+
+const PresenceAll = "presence.>"

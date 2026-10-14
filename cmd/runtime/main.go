@@ -16,12 +16,21 @@ import (
 
 	"github.com/Darth-S1d1ous/Termitaria/internal/bus"
 	"github.com/Darth-S1d1ous/Termitaria/internal/dispatcher"
+	"github.com/Darth-S1d1ous/Termitaria/internal/gateway"
+	"github.com/Darth-S1d1ous/Termitaria/internal/live"
 	"github.com/Darth-S1d1ous/Termitaria/internal/session"
+	"github.com/Darth-S1d1ous/Termitaria/internal/swarm"
 )
 
 func main() {
 	natsURL := flag.String("nats", envOr("NATS_URL", "nats://localhost:4222"), "NATS URL")
-	agents := flag.String("agents", "", "逗号分隔的 agent id（MVP 统一 stub 模型配置）")
+	agents := flag.String("agents", "", "逗号分隔的 agent id（须与 worker 的 WORKER_AGENTS 对齐）")
+	swarmDir := flag.String("swarmdir", envOr("SWARM_DIR", "examples/swarms"),
+		"SwarmSpec 目录：registry 注入 rolePrompt/budget，gateway 用它做项目模板")
+	httpAddr := flag.String("http", envOr("GATEWAY_ADDR", ""),
+		"gateway 监听地址（如 127.0.0.1:8787；空 = 不启动）。必须与 dispatcher 同进程——session 单写者")
+	statePath := flag.String("state", envOr("GATEWAY_STATE", "data/gateway-state.json"), "gateway 项目/session 映射状态文件")
+	replyTimeoutMs := flag.Uint64("reply-timeout-ms", envOrUint64("GATEWAY_REPLY_TIMEOUT_MS", 300000), "gateway 等 agent 回复的超时")
 	demo := flag.Bool("demo", false, "脚手架：开一条 agents[0]↔agents[1] 的 session，由前者种 kickoff")
 	maxTurns := flag.Uint("max-turns", 6, "demo session 轮次上限（SessionPolicy.max_turns），耗尽后挂起；0 = 不限")
 	idleTimeoutMs := flag.Uint64("idle-timeout-ms",
@@ -50,9 +59,30 @@ func main() {
 		log.Fatalf("ensure streams: %v", err)
 	}
 
+	// SwarmSpec 是 registry 与 gateway 的共同名册：按 agent id 注入 rolePrompt/budget。
+	// 目录读失败不致命——demo 场景没有 spec 也能跑（rolePrompt 为空，worker 用 fallback）。
+	var specs []*swarm.Spec
+	if loaded, err := swarm.LoadDir(*swarmDir); err != nil {
+		log.Printf("swarmdir %s: %v（rolePrompt 注入与 gateway 模板停用）", *swarmDir, err)
+	} else {
+		specs = loaded
+	}
+	byAgent := map[string]swarm.AgentSpec{}
+	for _, spec := range specs {
+		for _, a := range spec.Agents {
+			byAgent[a.ID] = a
+		}
+	}
 	registry := dispatcher.StaticRegistry{}
 	for _, id := range ids {
-		registry[id] = dispatcher.FromEnv()
+		cfg := dispatcher.FromEnv()
+		if a, ok := byAgent[id]; ok {
+			cfg.RolePrompt = a.RolePrompt
+			if a.Budget.MaxTokens > 0 {
+				cfg.Budget.MaxTokens = a.Budget.MaxTokens
+			}
+		}
+		registry[id] = cfg
 	}
 
 	// Gateway 落地前的观测面：把每条 MessageAppended 打出来。订在开 session 之前，kickoff 也能看见。
@@ -63,11 +93,30 @@ func main() {
 	defer stopWatch()
 
 	manager := session.NewManager(b)
+	hub := live.New()
 	d := dispatcher.New(b, manager, registry, 50)
+	d.SetHub(hub)
 	if err := d.Start(ctx); err != nil {
 		log.Fatalf("dispatcher start: %v", err)
 	}
 	defer d.Stop()
+	if *httpAddr != "" {
+		if len(specs) == 0 {
+			log.Fatalf("gateway 需要 SwarmSpec 模板：-swarmdir %s 无可读 spec", *swarmDir)
+		}
+		gw, err := gateway.New(manager, specs, *statePath, time.Duration(*replyTimeoutMs)*time.Millisecond, hub)
+		if err != nil {
+			log.Fatalf("gateway state: %v", err)
+		}
+		if err := gw.Start(ctx, b); err != nil {
+			log.Fatalf("gateway subscribe: %v", err)
+		}
+		go func() {
+			if err := gw.ListenAndServe(*httpAddr); err != nil {
+				log.Fatalf("gateway serve: %v", err)
+			}
+		}()
+	}
 	if *demo {
 		openDemoSession(manager, ids[0], ids[1], *idleTimeoutMs, uint32(*maxTurns))
 	}

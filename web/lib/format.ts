@@ -27,6 +27,7 @@ export function preview(chat: { last_message: string; last_role: string }): stri
 }
 
 export function statusLine(chat: { kind: string; agent_kind: string }): string {
+  if (chat.kind === "channel") return "channel";
   if (chat.kind === "saved") return "saved messages";
   if (chat.agent_kind === "ORCHESTRATOR") return "orchestrator";
   return "agent";
