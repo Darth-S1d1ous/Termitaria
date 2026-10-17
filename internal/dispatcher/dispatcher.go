@@ -41,6 +41,29 @@ func (r StaticRegistry) Lookup(agentID string) (AgentConfig, bool) {
 	return cfg, ok
 }
 
+// Registry 是可在运行中登记 agent 的名册。新建项目时把 SwarmSpec 里的 agent 登记进来。
+type Registry struct {
+	mu    sync.RWMutex
+	items map[string]AgentConfig
+}
+
+func NewRegistry() *Registry {
+	return &Registry{items: map[string]AgentConfig{}}
+}
+
+func (r *Registry) Lookup(agentID string) (AgentConfig, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	cfg, ok := r.items[agentID]
+	return cfg, ok
+}
+
+func (r *Registry) Register(agentID string, cfg AgentConfig) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.items[agentID] = cfg
+}
+
 // Dispatcher 订阅 session 事件流与 task result，做触发与回写。
 type Dispatcher struct {
 	bus         *bus.Bus

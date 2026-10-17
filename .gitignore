@@ -10,10 +10,15 @@ gen/
 .venv/
 __pycache__/
 *.egg-info/
+.pytest_cache/
 
 # Node
 node_modules/
 .next/
+*.tsbuildinfo
+
+# memory / graph 的本地 JSONL
+var/
 
 # example and temporary files
 *.example

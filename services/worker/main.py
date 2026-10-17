@@ -2,7 +2,9 @@
 
 用法：
     docker compose up -d nats
-    WORKER_AGENTS=ideator,reviewer .venv/bin/python -m services.worker.main
+    .venv/bin/python -m services.worker.main
+
+不设 WORKER_AGENTS 时消费全部 agent 队列。角色来自 SwarmSpec，不来自这条命令。
 """
 from __future__ import annotations
 
@@ -29,7 +31,11 @@ async def amain() -> None:
         cfg.model.model if cfg.model.api_key else "stub",
     )
     runner = TaskRunner(nc, model, cfg.producer)
-    consumers = [AgentConsumer(nc, agent_id, runner, cfg) for agent_id in cfg.agent_ids]
+    if cfg.agent_ids:
+        consumers = [AgentConsumer(nc, agent_id, runner, cfg) for agent_id in cfg.agent_ids]
+    else:
+        logging.getLogger(__name__).info("consuming tasks.*.* (all agents)")
+        consumers = [AgentConsumer(nc, None, runner, cfg)]
     try:
         await asyncio.gather(*(c.run() for c in consumers))
     finally:

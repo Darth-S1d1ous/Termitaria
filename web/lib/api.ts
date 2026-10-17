@@ -26,8 +26,18 @@ export function loadProjects() {
   return api<{ projects: Project[] }>("/api/projects");
 }
 
-export function createProject(name: string) {
-  return api<Project>("/api/projects", { method: "POST", body: { name } });
+export type SwarmSpecDoc = {
+  name: string;
+  goal: string;
+  yaml: string;
+};
+
+export function loadSwarmSpecs() {
+  return api<{ specs: SwarmSpecDoc[] }>("/api/swarmspecs");
+}
+
+export function createProject(name: string, spec: string) {
+  return api<Project>("/api/projects", { method: "POST", body: { name, spec } });
 }
 
 export function deleteProject(projectId: string) {

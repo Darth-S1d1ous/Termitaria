@@ -1,4 +1,8 @@
-.PHONY: proto lint breaking hooks
+.PHONY: proto lint breaking hooks up
+
+# 拉起 NATS、控制面、worker、memory、graph、Web。角色不写在命令里。
+up:
+	./scripts/dev.sh
 
 # 从 proto/ 生成 Go 绑定到 gen/go/（依赖本机 buf + protoc-gen-go + protoc-gen-go-grpc）
 proto:

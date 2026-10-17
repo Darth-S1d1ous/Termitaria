@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import {
   createProject,
   deleteProject,
@@ -8,11 +8,14 @@ import {
   loadChats,
   loadMessages,
   loadProjects,
+  loadSwarmSpecs,
   loadTopology,
+  type SwarmSpecDoc,
 } from "../lib/api";
 import { AnimalIcon, markFor } from "../lib/animals";
 import { colorFor, formatTime, initials, preview, statusLine } from "../lib/format";
-import type { Chat, ChatMessage, MeshEdge, Project, View } from "../lib/types";
+import { deleteSeeds, loadSeeds, saveSeeds, type Seed } from "../lib/seeds";
+import type { Chat, ChatMessage, MeshEdge, Project, ProjectStep, View } from "../lib/types";
 import {
   BackIcon,
   BookmarkIcon,
@@ -25,6 +28,8 @@ import {
   SendIcon,
   TrashIcon,
 } from "./icons";
+import { KnowledgeGraph } from "./KnowledgeGraph";
+import { NewProject } from "./NewProject";
 import { SwarmView } from "./SwarmView";
 
 type LiveFrame = {
@@ -40,17 +45,30 @@ type LiveFrame = {
   to?: string;
   message?: ChatMessage | string;
   client_msg_id?: string;
+  steps?: ProjectStep[];
 };
+
+const LIST_DEFAULT = 380;
+const LIST_MIN = 260;
+const LIST_WIDTH_KEY = "termitaria.chatListWidth";
+const LIST_COLLAPSED_KEY = "termitaria.chatListCollapsed";
+
+function clampListWidth(width: number) {
+  const max = Math.max(LIST_MIN, window.innerWidth - 76 - 320);
+  return Math.min(max, Math.max(LIST_MIN, Math.round(width)));
+}
 
 export function AppShell() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [view, setView] = useState<View>("chats");
+  const [projectPane, setProjectPane] = useState<"chats" | "knowledge">("chats");
   const [chats, setChats] = useState<Chat[]>([]);
   const [chatId, setChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
-  const [projectName, setProjectName] = useState("");
+  const [specs, setSpecs] = useState<SwarmSpecDoc[]>([]);
+  const [seeds, setSeeds] = useState<Seed[]>([]);
   const [query, setQuery] = useState("");
   const [waiting, setWaiting] = useState<Record<string, boolean>>({});
   const [presence, setPresence] = useState<Record<string, string>>({});
@@ -66,6 +84,11 @@ export function AppShell() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState("");
   const [booting, setBooting] = useState(true);
+  const [listWidth, setListWidth] = useState(LIST_DEFAULT);
+  const [listCollapsed, setListCollapsed] = useState(false);
+  const [resizing, setResizing] = useState(false);
+  const listWidthRef = useRef(listWidth);
+  listWidthRef.current = listWidth;
 
   const project = projects.find((item) => item.id === projectId) ?? null;
   const chat = chats.find((item) => item.id === chatId) ?? null;
@@ -74,6 +97,50 @@ export function AppShell() {
     if (!needle) return chats;
     return chats.filter((item) => item.title.toLowerCase().includes(needle));
   }, [chats, query]);
+
+  useEffect(() => {
+    const rawWidth = localStorage.getItem(LIST_WIDTH_KEY);
+    const savedWidth = rawWidth ? Number(rawWidth) : NaN;
+    if (Number.isFinite(savedWidth)) setListWidth(clampListWidth(savedWidth));
+    if (localStorage.getItem(LIST_COLLAPSED_KEY) === "1") setListCollapsed(true);
+  }, []);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.repeat || event.altKey || event.shiftKey) return;
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "b") return;
+      if (!window.matchMedia("(min-width: 861px)").matches) return;
+      event.preventDefault();
+      setListCollapsed((collapsed) => {
+        const next = !collapsed;
+        localStorage.setItem(LIST_COLLAPSED_KEY, next ? "1" : "0");
+        return next;
+      });
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  function onResizePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!window.matchMedia("(min-width: 861px)").matches) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startW = listWidthRef.current;
+    setResizing(true);
+    function move(e: PointerEvent) {
+      const next = clampListWidth(startW + e.clientX - startX);
+      listWidthRef.current = next;
+      setListWidth(next);
+    }
+    function up() {
+      setResizing(false);
+      localStorage.setItem(LIST_WIDTH_KEY, String(listWidthRef.current));
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
 
   useEffect(() => {
     let cancel = false;
@@ -145,7 +212,18 @@ export function AppShell() {
     };
   }, [projectId, chatId]);
 
+  useEffect(() => {
+    setSeeds(projectId ? loadSeeds(projectId) : []);
+  }, [projectId]);
+
   onFrame.current = (frame) => {
+    if (frame.type === "plan" && frame.steps && projectId) {
+      const steps = frame.steps;
+      setProjects((current) =>
+        current.map((item) => (item.id === projectId ? { ...item, steps } : item)),
+      );
+      return;
+    }
     if (frame.type === "presence" && frame.agent_id && frame.state) {
       setPresence((current) => ({ ...current, [frame.agent_id as string]: frame.state as string }));
       return;
@@ -250,17 +328,33 @@ export function AppShell() {
     };
   }, [projectId]);
 
-  async function onCreateProject() {
-    const name = projectName.trim();
-    if (!name || savingProject) return;
+  useEffect(() => {
+    if (view !== "create") return;
+    let cancel = false;
+    loadSwarmSpecs()
+      .then((data) => {
+        if (cancel) return;
+        setSpecs(data.specs);
+      })
+      .catch((err: unknown) => {
+        if (!cancel) setError(err instanceof Error ? err.message : "Could not load swarm specs");
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [view]);
+
+  async function onCreateProject(name: string, spec: string, nextSeeds: Seed[]) {
+    if (!name || !spec || savingProject) return;
     setSavingProject(true);
     setError("");
     try {
-      const created = await createProject(name);
+      const created = await createProject(name, spec);
+      saveSeeds(created.id, nextSeeds);
+      setSeeds(nextSeeds);
       setProjects((current) => [...current, created]);
       setChatId(null);
       setProjectId(created.id);
-      setProjectName("");
       setView("chats");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not create project");
@@ -274,9 +368,15 @@ export function AppShell() {
     setError("");
     try {
       await deleteProject(projectId);
+      deleteSeeds(projectId);
       const next = projects.filter((item) => item.id !== projectId);
       setProjects(next);
       setChatId(null);
+      setMessages([]);
+      setChats([]);
+      setEdges([]);
+      setSeeds([]);
+      setProjectPane("chats");
       setProjectId(next[0]?.id ?? null);
       setConfirmDelete(false);
       setView("chats");
@@ -319,11 +419,15 @@ export function AppShell() {
     }));
   }
 
-  const solo = view !== "chats";
-  const chatOpen = view === "chats" && chatId !== null;
+  const solo = view !== "chats" || !project || projectPane === "knowledge";
+  const chatOpen = view === "chats" && project !== null && projectPane === "chats" && chatId !== null;
+  const hasPlan = view === "chats" && Boolean(project?.steps?.length);
 
   return (
-    <div className={`shell${solo ? " solo" : ""}${chatOpen ? " chat-open" : ""}`}>
+    <div
+      className={`shell${solo ? " solo" : ""}${chatOpen ? " chat-open" : ""}${hasPlan ? " has-plan" : ""}${listCollapsed ? " list-collapsed" : ""}${resizing ? " resizing" : ""}`}
+      style={{ "--list-w": `${listWidth}px` } as CSSProperties}
+    >
       <aside className="rail">
         <button className="mark" type="button" aria-label="Chats" onClick={() => setView("chats")}>
           T
@@ -376,7 +480,28 @@ export function AppShell() {
         </div>
       </aside>
 
-      {view === "chats" && (
+      {hasPlan && project?.steps ? (
+        <ol className="plan" aria-label="Project progress">
+          {project.steps.map((step) => (
+            <li key={step.id} className={step.state}>
+              <i />
+              <span>{step.label}</span>
+              <em className="plan-full" role="tooltip">{step.label}</em>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+
+      {view === "chats" && !project && !booting && (
+        <main className="blank" aria-label="No project">
+          <div className="empty">
+            <strong>No project</strong>
+            <p>最后一个项目已经删掉。点左边的 + 再建一个。</p>
+          </div>
+        </main>
+      )}
+
+      {view === "chats" && project && projectPane === "chats" && (
         <section className="chat-list" aria-label="Chats">
           <header className="pane-header">
             {confirmDelete ? (
@@ -403,6 +528,14 @@ export function AppShell() {
               </>
             )}
           </header>
+          <div className="pane-switch" role="tablist" aria-label="Project views">
+            <button type="button" role="tab" aria-selected onClick={() => setProjectPane("chats")}>
+              Chats
+            </button>
+            <button type="button" role="tab" aria-selected={false} onClick={() => setProjectPane("knowledge")}>
+              Knowledge
+            </button>
+          </div>
           <label className="search">
             <SearchIcon />
             <input
@@ -436,10 +569,18 @@ export function AppShell() {
               </button>
             ))}
           </div>
+          <div
+            className="list-resize"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize chats"
+            tabIndex={0}
+            onPointerDown={onResizePointerDown}
+          />
         </section>
       )}
 
-      {view === "chats" && (
+      {view === "chats" && project && projectPane === "chats" && (
         <Conversation
           chat={chat}
           messages={messages}
@@ -460,6 +601,10 @@ export function AppShell() {
         />
       )}
 
+      {view === "chats" && project && projectPane === "knowledge" && (
+        <KnowledgeGraph key={projectId ?? "none"} seeds={seeds} onChats={() => setProjectPane("chats")} />
+      )}
+
       {view === "graph" && (
         <SwarmView
           agents={project?.agents ?? []}
@@ -476,56 +621,36 @@ export function AppShell() {
         />
       )}
       {view === "lifecycle" && (
-        <main className="blank" aria-label="Memory inspector">
-          <div className="empty">
-            <strong>Memory Inspector</strong>
-            <p>记忆服务还没接上</p>
-          </div>
+        <main className="blank knowledge-view" aria-label="Memory inspector">
+          <header className="pane-header">
+            <div className="pane-title">
+              <h1>Memory Inspector</h1>
+              <p>图数据库还没接上。这里只显示创建项目时放进来的材料。</p>
+            </div>
+          </header>
+          <ul className="seed-list">
+            {seeds.length === 0 ? <li className="slot-hint">这个项目还没有初始材料</li> : null}
+            {seeds.map((item) => (
+              <li key={item.id}>
+                <span className="seed-kind">{item.kind}</span>
+                <span className="seed-title">{item.title}</span>
+              </li>
+            ))}
+          </ul>
         </main>
       )}
 
       {view === "create" && (
-        <section className="builder" aria-label="New project">
-          <header className="pane-header">
-            <h1>New project</h1>
-            <div className="header-actions">
-              <button className="text-btn" type="button" onClick={() => setView("chats")}>
-                Cancel
-              </button>
-              <button
-                className="primary"
-                type="button"
-                disabled={!projectName.trim() || savingProject}
-                onClick={onCreateProject}
-              >
-                Create
-              </button>
-            </div>
-          </header>
-          {error ? <p className="banner">{error}</p> : null}
-          <div className="builder-body">
-            <label className="name-field">
-              <span>Project name</span>
-              <input
-                value={projectName}
-                autoFocus
-                aria-label="Project name"
-                onChange={(event) => setProjectName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") onCreateProject();
-                }}
-              />
-            </label>
-            <div className="slots">
-              <div className="slot" aria-label="Team">
-                <span className="slot-label">Team</span>
-              </div>
-              <div className="slot" aria-label="Initial knowledge graph">
-                <span className="slot-label">Knowledge graph</span>
-              </div>
-            </div>
-          </div>
-        </section>
+        <NewProject
+          specs={specs}
+          saving={savingProject}
+          error={error}
+          onCancel={() => {
+            setError("");
+            setView("chats");
+          }}
+          onCreate={onCreateProject}
+        />
       )}
     </div>
   );

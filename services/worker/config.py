@@ -18,13 +18,10 @@ class WorkerConfig:
 
     @classmethod
     def from_env(cls) -> "WorkerConfig":
+        # 空名单 = 消费全部 tasks.*.*。角色在创建 swarm / 项目时确定，不在启动命令里写死。
         agents = tuple(
             a.strip() for a in os.environ.get("WORKER_AGENTS", "").split(",") if a.strip()
         )
-        if not agents:
-            raise SystemExit(
-                "WORKER_AGENTS 为空：逗号分隔的 agent id 列表，例：WORKER_AGENTS=ideator,reviewer"
-            )
         return cls(
             nats_url=os.environ.get("NATS_URL", "nats://localhost:4222"),
             agent_ids=agents,

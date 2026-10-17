@@ -1,10 +1,19 @@
 export type AgentKind = "ORCHESTRATOR" | "WORKER" | "";
 
+export type StepState = "pending" | "active" | "done" | "failed";
+
+export type ProjectStep = {
+  id: string;
+  label: string;
+  state: StepState;
+};
+
 export type Project = {
   id: string;
   name: string;
   goal: string;
   agents: { id: string; display_name: string; kind: string }[];
+  steps?: ProjectStep[];
 };
 
 export type Chat = {

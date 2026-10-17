@@ -17,13 +17,14 @@ var ErrSessionNotFound = errors.New("session not found")
 // Manager 是 sessionID → Actor 的注册表，兼管崩溃后的重放恢复。
 // 它是 Supervisor 的 MVP 形态（架构 §3.1：故障隔离在 supervisor）。
 type Manager struct {
-	bus    *bus.Bus
-	mu     sync.RWMutex
-	actors map[string]*Actor
+	bus     *bus.Bus
+	mu      sync.RWMutex
+	actors  map[string]*Actor
+	dropped map[string]bool // swarm id：删掉的项目不再从事件流复活
 }
 
 func NewManager(b *bus.Bus) *Manager {
-	return &Manager{bus: b, actors: make(map[string]*Actor)}
+	return &Manager{bus: b, actors: make(map[string]*Actor), dropped: map[string]bool{}}
 }
 
 func (m *Manager) OpenSession(
@@ -147,6 +148,72 @@ func (m *Manager) ListSessions(ctx context.Context, swarmID string, stateFilter 
 	return out, nil
 }
 
+// ForgetSwarm 丢掉这个项目的 session：内存里的 actor 不再往总线上写，
+// 然后清掉 sessions.<swarm>.> 和 tasks.<swarm>.>。知识图和记忆的项目材料在前端。
+func (m *Manager) ForgetSwarm(ctx context.Context, swarmID string) error {
+	m.mu.Lock()
+	m.dropped[swarmID] = true
+	actors := make([]*Actor, 0, len(m.actors))
+	for _, a := range m.actors {
+		actors = append(actors, a)
+	}
+	m.mu.Unlock()
+
+	var ids []string
+	for _, a := range actors {
+		cmd := getCmd{result: make(chan *sessionv1.Session, 1)}
+		select {
+		case a.mailbox <- cmd:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		var sess *sessionv1.Session
+		select {
+		case sess = <-cmd.result:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if sess.GetSwarmId() != swarmID {
+			continue
+		}
+		done := make(chan struct{})
+		select {
+		case a.mailbox <- dropCmd{done: done}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		ids = append(ids, sess.GetSessionId())
+	}
+
+	m.mu.Lock()
+	for _, id := range ids {
+		delete(m.actors, id)
+	}
+	m.mu.Unlock()
+
+	for _, item := range []struct{ stream, subject string }{
+		{"SESSIONS", "sessions." + swarmID + ".>"},
+		{"TASKS", "tasks." + swarmID + ".>"},
+	} {
+		st, err := m.bus.JetStream().Stream(ctx, item.stream)
+		if err != nil {
+			return fmt.Errorf("stream %s: %w", item.stream, err)
+		}
+		if err := st.Purge(ctx, jetstream.WithPurgeSubject(item.subject)); err != nil {
+			m.mu.Lock()
+			delete(m.dropped, swarmID)
+			m.mu.Unlock()
+			return fmt.Errorf("purge %s: %w", item.subject, err)
+		}
+	}
+	return nil
+}
+
 // getOrRecover 命中内存直接返回；未命中则从事件流重放重建（actor 崩溃 / 进程重启后）。
 func (m *Manager) getOrRecover(ctx context.Context, sessionID string) (*Actor, error) {
 	m.mu.RLock()
@@ -201,8 +268,8 @@ func (m *Manager) replay(ctx context.Context, sessionID string) (*Actor, error) 
 			break
 		}
 	}
-	if a.state == nil {
-		return nil, ErrSessionNotFound // 事件流里没有这条 session
+	if a.state == nil || m.dropped[a.state.GetSwarmId()] {
+		return nil, ErrSessionNotFound // 事件流里没有，或这个项目已经删掉
 	}
 	go a.run()
 	return a, nil

@@ -317,3 +317,36 @@ func TestSnapshotWindow(t *testing.T) {
 		t.Errorf("turn_index = %d, want 3", snap.Session.GetTurnIndex())
 	}
 }
+
+func TestForgetSwarmErasesHistoryAndLeavesOtherSwarms(t *testing.T) {
+	b, m := newManager(t)
+	gone := open(t, m, strictPolicy())
+	if _, err := appendMsg(t, m, gone.SessionId, agent("a"), ""); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := m.OpenSession(context.Background(), "sw2",
+		[]*sessionv1.Participant{agent("a"), agent("b")}, strictPolicy(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ForgetSwarm(context.Background(), "sw1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Snapshot(context.Background(), gone.SessionId, 0); !errors.Is(err, session.ErrSessionNotFound) {
+		t.Fatalf("deleted session snapshot: %v", err)
+	}
+	if _, err := m.Snapshot(context.Background(), kept.SessionId, 0); err != nil {
+		t.Fatalf("other swarm: %v", err)
+	}
+	st, err := b.JetStream().Stream(context.Background(), "SESSIONS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := st.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State.Msgs == 0 {
+		t.Fatal("purge removed the other swarm too")
+	}
+}

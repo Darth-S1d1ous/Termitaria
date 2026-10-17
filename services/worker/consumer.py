@@ -1,7 +1,7 @@
-"""JetStream durable pull consumer：每 agent 一个（接口计划 · 决策点 4）。
+"""JetStream durable pull consumer。
 
-- filter `tasks.*.<agent>`：一个 worker 进程可跨 swarm 服务同一 agent，
-  HPA 按该 durable 的 pending 深度扩缩（架构 §4）；
+- 默认一个 consumer，filter `tasks.*.*`：swarm 里新建的 agent 不用改启动命令。
+  设了 WORKER_AGENTS 时仍是每 agent 一个（`tasks.*.<agent>`），便于按队列深度扩缩。
 - ack 在 TaskResult 发布成功之后 → 至少一次投递；重投由内存 _seen 挡一道，
   进程重启后的兜底去重在 actor 侧按 task_id 做（Go 侧待办）；
 - 推理期间每 10s 一次 in_progress() 心跳，防止长任务被 ack_wait 判死重投。
@@ -25,8 +25,22 @@ _STREAM = "TASKS"
 _HEARTBEAT_S = 10.0
 
 
+async def _retire_per_agent_consumers(js) -> None:
+    # TASKS 是 WorkQueue，filter 不能重叠。旧的 worker-<id> 会挡住 tasks.*.*。
+    try:
+        infos = await js.consumers_info(_STREAM)
+    except Exception:
+        log.info("no existing TASKS consumers to retire")
+        return
+    for info in infos:
+        if not info.name.startswith("worker-"):
+            continue
+        await js.delete_consumer(_STREAM, info.name)
+        log.info("retired overlapping consumer %s", info.name)
+
+
 class AgentConsumer:
-    def __init__(self, nc, agent_id: str, runner: TaskRunner, cfg: WorkerConfig) -> None:
+    def __init__(self, nc, agent_id: str | None, runner: TaskRunner, cfg: WorkerConfig) -> None:
         self._nc = nc
         self._js = nc.jetstream()
         self._agent_id = agent_id
@@ -37,21 +51,32 @@ class AgentConsumer:
 
     @property
     def durable(self) -> str:
-        return f"worker-{self._agent_id}"
+        if self._agent_id:
+            return f"worker-{self._agent_id}"
+        return "worker"
+
+    @property
+    def subject(self) -> str:
+        if self._agent_id:
+            return f"tasks.*.{self._agent_id}"
+        return "tasks.*.*"
 
     async def run(self) -> None:
         # presence 不进 JetStream。Gateway 收到后改成 WebSocket 帧。
-        await self._nc.publish(f"presence.{self._agent_id}", b"online")
+        # 全队列模式不在这里报在线：agent 由 SwarmSpec / 创建项目时登记。
+        if self._agent_id:
+            await self._nc.publish(f"presence.{self._agent_id}", b"online")
         try:
             await self._loop()
         finally:
-            await self._nc.publish(f"presence.{self._agent_id}", b"offline")
+            if self._agent_id:
+                await self._nc.publish(f"presence.{self._agent_id}", b"offline")
 
     async def _loop(self) -> None:
-        sub = await self._js.pull_subscribe(
-            f"tasks.*.{self._agent_id}", durable=self.durable, stream=_STREAM
-        )
-        log.info("consumer up: durable=%s filter=tasks.*.%s", self.durable, self._agent_id)
+        if self._agent_id is None:
+            await _retire_per_agent_consumers(self._js)
+        sub = await self._js.pull_subscribe(self.subject, durable=self.durable, stream=_STREAM)
+        log.info("consumer up: durable=%s filter=%s", self.durable, self.subject)
         pending: set[asyncio.Task] = set()
         while True:
             try:

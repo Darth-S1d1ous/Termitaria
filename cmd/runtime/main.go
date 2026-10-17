@@ -22,13 +22,36 @@ import (
 	"github.com/Darth-S1d1ous/Termitaria/internal/swarm"
 )
 
+// colony 在进程内拉起 agent：登记角色与预算，并把 presence 标成在线。
+type colony struct {
+	reg *dispatcher.Registry
+	hub *live.Hub
+}
+
+func (c colony) Start(id, rolePrompt string, maxTokens uint32) {
+	cfg, ok := c.reg.Lookup(id)
+	if !ok {
+		cfg = dispatcher.FromEnv()
+	}
+	if rolePrompt != "" {
+		cfg.RolePrompt = rolePrompt
+	}
+	if maxTokens > 0 && cfg.Budget != nil {
+		budget := *cfg.Budget
+		budget.MaxTokens = maxTokens
+		cfg.Budget = &budget
+	}
+	c.reg.Register(id, cfg)
+	c.hub.SetPresence(id, "online")
+}
+
 func main() {
 	natsURL := flag.String("nats", envOr("NATS_URL", "nats://localhost:4222"), "NATS URL")
-	agents := flag.String("agents", "", "逗号分隔的 agent id（须与 worker 的 WORKER_AGENTS 对齐）")
+	agents := flag.String("agents", "", "可选。额外登记的 agent id；角色与名册来自 SwarmSpec，以及运行中创建的项目")
 	swarmDir := flag.String("swarmdir", envOr("SWARM_DIR", "examples/swarms"),
 		"SwarmSpec 目录：registry 注入 rolePrompt/budget，gateway 用它做项目模板")
-	httpAddr := flag.String("http", envOr("GATEWAY_ADDR", ""),
-		"gateway 监听地址（如 127.0.0.1:8787；空 = 不启动）。必须与 dispatcher 同进程——session 单写者")
+	httpAddr := flag.String("http", envOr("GATEWAY_ADDR", "127.0.0.1:8787"),
+		"gateway 监听地址（空 = 不启动）。必须与 dispatcher 同进程——session 单写者")
 	statePath := flag.String("state", envOr("GATEWAY_STATE", "data/gateway-state.json"), "gateway 项目/session 映射状态文件")
 	replyTimeoutMs := flag.Uint64("reply-timeout-ms", envOrUint64("GATEWAY_REPLY_TIMEOUT_MS", 300000), "gateway 等 agent 回复的超时")
 	demo := flag.Bool("demo", false, "脚手架：开一条 agents[0]↔agents[1] 的 session，由前者种 kickoff")
@@ -39,12 +62,6 @@ func main() {
 	flag.Parse()
 
 	ids := splitCSV(*agents)
-	if len(ids) == 0 {
-		log.Fatal("-agents is empty: no agents to dispatch to")
-	}
-	if *demo && len(ids) < 2 {
-		log.Fatal("-demo 需要至少两个 -agents，例如 -agents=ideator,reviewer（worker 的 WORKER_AGENTS 必须是同一对）")
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -67,22 +84,31 @@ func main() {
 	} else {
 		specs = loaded
 	}
-	byAgent := map[string]swarm.AgentSpec{}
+	registry := dispatcher.NewRegistry()
+	hub := live.New()
+	started := colony{reg: registry, hub: hub}
+	var roster []string
 	for _, spec := range specs {
 		for _, a := range spec.Agents {
-			byAgent[a.ID] = a
+			started.Start(a.ID, a.RolePrompt, a.Budget.MaxTokens)
+			roster = append(roster, a.ID)
 		}
 	}
-	registry := dispatcher.StaticRegistry{}
 	for _, id := range ids {
-		cfg := dispatcher.FromEnv()
-		if a, ok := byAgent[id]; ok {
-			cfg.RolePrompt = a.RolePrompt
-			if a.Budget.MaxTokens > 0 {
-				cfg.Budget.MaxTokens = a.Budget.MaxTokens
-			}
+		if _, ok := registry.Lookup(id); !ok {
+			started.Start(id, "", 0)
+			roster = append(roster, id)
 		}
-		registry[id] = cfg
+	}
+	pair := roster
+	if len(ids) > 0 {
+		pair = ids
+	}
+	if len(roster) == 0 {
+		log.Fatal("没有可调度的 agent：SwarmSpec 为空，也没有 -agents")
+	}
+	if *demo && len(pair) < 2 {
+		log.Fatal("-demo 需要至少两个 agent（来自 SwarmSpec 或 -agents）")
 	}
 
 	// Gateway 落地前的观测面：把每条 MessageAppended 打出来。订在开 session 之前，kickoff 也能看见。
@@ -93,7 +119,6 @@ func main() {
 	defer stopWatch()
 
 	manager := session.NewManager(b)
-	hub := live.New()
 	d := dispatcher.New(b, manager, registry, 50)
 	d.SetHub(hub)
 	if err := d.Start(ctx); err != nil {
@@ -104,7 +129,7 @@ func main() {
 		if len(specs) == 0 {
 			log.Fatalf("gateway 需要 SwarmSpec 模板：-swarmdir %s 无可读 spec", *swarmDir)
 		}
-		gw, err := gateway.New(manager, specs, *statePath, time.Duration(*replyTimeoutMs)*time.Millisecond, hub)
+		gw, err := gateway.New(manager, specs, *statePath, time.Duration(*replyTimeoutMs)*time.Millisecond, hub, started)
 		if err != nil {
 			log.Fatalf("gateway state: %v", err)
 		}
@@ -118,9 +143,10 @@ func main() {
 		}()
 	}
 	if *demo {
-		openDemoSession(manager, ids[0], ids[1], *idleTimeoutMs, uint32(*maxTurns))
+		openDemoSession(manager, pair[0], pair[1], *idleTimeoutMs, uint32(*maxTurns))
 	}
-	log.Printf("runtime up: agents=%v nats=%s model=%s", ids, *natsURL, registry[ids[0]].Model.GetModel())
+	cfg, _ := registry.Lookup(roster[0])
+	log.Printf("runtime up: agents=%v nats=%s model=%s", roster, *natsURL, cfg.Model.GetModel())
 	<-ctx.Done()
 	log.Println("shutting down")
 }
@@ -151,8 +177,8 @@ func openDemoSession(m *session.Manager, openerID, peerID string, idleTimeoutMs 
 		"", "", ""); err != nil {
 		log.Fatalf("demo kickoff: %v", err)
 	}
-	log.Printf("demo session %s：%s 已种 kickoff（计入 max_turns=%d），下一发言者 %s。worker 需 WORKER_AGENTS=%s,%s",
-		sess.GetSessionId(), openerID, maxTurns, peerID, openerID, peerID)
+	log.Printf("demo session %s：%s 已种 kickoff（计入 max_turns=%d），下一发言者 %s",
+		sess.GetSessionId(), openerID, maxTurns, peerID)
 }
 
 // watchMessages 订阅 sessions.>，只打印 MessageAppended。其余事件 ack 后丢掉。

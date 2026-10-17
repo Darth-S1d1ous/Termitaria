@@ -28,6 +28,9 @@ func (s *Server) Start(ctx context.Context, b *bus.Bus) error {
 	if _, err := b.Conn().Subscribe(bus.PresenceAll, s.onPresence); err != nil {
 		return err
 	}
+	if _, err := b.Conn().Subscribe(bus.TaskResultAll, s.onTaskResult); err != nil {
+		return err
+	}
 	cons, err := b.JetStream().CreateOrUpdateConsumer(ctx, "SESSIONS", jetstream.ConsumerConfig{
 		Durable:       "gateway-fanout",
 		FilterSubject: bus.SessionEventsAll,

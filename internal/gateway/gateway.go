@@ -1,7 +1,6 @@
 // Package gateway 是浏览器到控制面的 HTTP 入口（架构 §2 Gateway 的 MVP 形态）。
 //
-// 契约与已删除的 services/clientapi 完全一致，前端零改动；
-// 区别在于回复不再直连模型，而是走 session → dispatcher → worker 的 NATS 链路。
+// 回复不直连模型，走 session → dispatcher → worker 的 NATS 链路。
 //
 // 单写者约束：session actor 全进程唯一，gateway 必须与 dispatcher 同进程、
 // 共享同一个 session.Manager（cmd/runtime 装配）。拆成独立进程的前提是
@@ -52,6 +51,7 @@ type projectJSON struct {
 	Name   string      `json:"name"`
 	Goal   string      `json:"goal"`
 	Agents []agentJSON `json:"agents"`
+	Steps  []stepJSON  `json:"steps,omitempty"`
 }
 
 type stateFile struct {
@@ -59,9 +59,23 @@ type stateFile struct {
 	Sessions map[string]string `json:"sessions"` // "<project>/<chat>" → session_id
 }
 
+// AgentStarter 把 SwarmSpec 里的 agent 登记进控制面并标为在线。
+// 空 rolePrompt / maxTokens 表示保留已有配置，只确认这个 agent 已被拉起。
+type AgentStarter interface {
+	Start(id, rolePrompt string, maxTokens uint32)
+}
+
+type specJSON struct {
+	Name string `json:"name"`
+	Goal string `json:"goal"`
+	YAML string `json:"yaml"`
+}
+
 type Server struct {
 	manager      *session.Manager
-	template     *projectJSON // 新建项目克隆的名册
+	template     *projectJSON // 未带 SwarmSpec 时，新建项目克隆的名册
+	specs        []specJSON
+	starter      AgentStarter
 	replyTimeout time.Duration
 	hub          *live.Hub
 	fanout       interface{ Stop() }
@@ -73,18 +87,21 @@ type Server struct {
 }
 
 // New 装载状态文件；首次启动为每个 spec 建一个默认项目（id = spec 名）。
-func New(manager *session.Manager, specs []*swarm.Spec, statePath string, replyTimeout time.Duration, hub *live.Hub) (*Server, error) {
+func New(manager *session.Manager, specs []*swarm.Spec, statePath string, replyTimeout time.Duration, hub *live.Hub, starter AgentStarter) (*Server, error) {
 	if hub == nil {
 		hub = live.New()
 	}
 	s := &Server{
 		manager:      manager,
+		starter:      starter,
 		replyTimeout: replyTimeout,
 		hub:          hub,
 		path:         statePath,
 		sessions:     map[string]string{},
 	}
 	for _, spec := range specs {
+		s.specs = append(s.specs, specJSON{Name: spec.Name, Goal: spec.Goal, YAML: spec.Raw})
+		s.startSpec(spec)
 		if spec.Name == "autoresearch" {
 			s.template = projectFromSpec(spec.Name, spec)
 		}
@@ -100,6 +117,9 @@ func New(manager *session.Manager, specs []*swarm.Spec, statePath string, replyT
 		s.projects, s.sessions = f.Projects, f.Sessions
 		if s.sessions == nil {
 			s.sessions = map[string]string{}
+		}
+		for _, p := range s.projects {
+			s.startProject(p)
 		}
 	} else if os.IsNotExist(err) {
 		for _, spec := range specs {
@@ -126,11 +146,32 @@ func projectFromSpec(id string, spec *swarm.Spec) *projectJSON {
 	return p
 }
 
-func (s *Server) ListenAndServe(addr string) error {
+// startSpec 按声明拉起 spec 里的每个 agent。
+func (s *Server) startSpec(spec *swarm.Spec) {
+	if s.starter == nil || spec == nil {
+		return
+	}
+	for _, agent := range spec.Agents {
+		s.starter.Start(agent.ID, agent.RolePrompt, agent.Budget.MaxTokens)
+	}
+}
+
+// startProject 重启后把已有项目的 agent 再拉起一次。没有 prompt 时保留登记表里的角色。
+func (s *Server) startProject(p *projectJSON) {
+	if s.starter == nil || p == nil {
+		return
+	}
+	for _, agent := range p.Agents {
+		s.starter.Start(agent.ID, "", 0)
+	}
+}
+
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
+	mux.HandleFunc("GET /api/swarmspecs", s.listSpecs)
 	mux.HandleFunc("GET /api/projects", s.listProjects)
 	mux.HandleFunc("POST /api/projects", s.createProject)
 	mux.HandleFunc("DELETE /api/projects/{id}", s.deleteProject)
@@ -139,8 +180,12 @@ func (s *Server) ListenAndServe(addr string) error {
 	mux.HandleFunc("POST /api/projects/{id}/chats/{chat}/messages", s.postMessage)
 	mux.HandleFunc("GET /api/projects/{id}/topology", s.topology)
 	mux.HandleFunc("GET /api/ws", s.serveWS)
+	return cors(mux)
+}
+
+func (s *Server) ListenAndServe(addr string) error {
 	log.Printf("gateway http://%s", addr)
-	return http.ListenAndServe(addr, cors(mux))
+	return http.ListenAndServe(addr, s.Handler())
 }
 
 func cors(next http.Handler) http.Handler {
@@ -164,30 +209,59 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"projects": s.projects})
 }
 
+func (s *Server) listSpecs(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]any{"specs": s.specs})
+}
+
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 		Goal string `json:"goal"`
+		Spec string `json:"spec"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "bad json")
 		return
 	}
 	name := strings.TrimSpace(body.Name)
-	if name == "" {
+	var compiled *swarm.Spec
+	if strings.TrimSpace(body.Spec) != "" {
+		spec, err := swarm.Parse([]byte(body.Spec))
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		compiled = spec
+	}
+	if name == "" && compiled == nil {
 		writeError(w, 400, "name is required")
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p := &projectJSON{
-		ID:     "p_" + randHex(6),
-		Name:   name,
-		Goal:   strings.TrimSpace(body.Goal),
-		Agents: s.template.Agents,
+	var p *projectJSON
+	if compiled != nil {
+		p = projectFromSpec("p_"+randHex(6), compiled)
+		if name != "" {
+			p.Name = name
+		}
+		s.startSpec(compiled)
+	} else {
+		p = &projectJSON{
+			ID:     "p_" + randHex(6),
+			Name:   name,
+			Goal:   strings.TrimSpace(body.Goal),
+			Agents: append([]agentJSON(nil), s.template.Agents...),
+		}
+		if p.Goal == "" {
+			p.Goal = s.template.Goal
+		}
+		s.startProject(p)
 	}
-	if p.Goal == "" {
-		p.Goal = s.template.Goal
+	p.Steps = newPlan(p.Goal)
+	if err := s.announcePlan(r.Context(), p); err != nil {
+		writeError(w, 502, err.Error())
+		return
 	}
 	s.projects = append(s.projects, p)
 	if err := s.save(); err != nil {
@@ -202,20 +276,25 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, p := range s.projects {
-		if p.ID == id {
-			s.projects = append(s.projects[:i], s.projects[i+1:]...)
-			for key := range s.sessions {
-				if strings.HasPrefix(key, id+"/") {
-					delete(s.sessions, key)
-				}
-			}
-			if err := s.save(); err != nil {
-				writeError(w, 502, err.Error())
-				return
-			}
-			w.WriteHeader(204)
+		if p.ID != id {
+			continue
+		}
+		if err := s.manager.ForgetSwarm(r.Context(), id); err != nil {
+			writeError(w, 502, err.Error())
 			return
 		}
+		s.projects = append(s.projects[:i], s.projects[i+1:]...)
+		for key := range s.sessions {
+			if strings.HasPrefix(key, id+"/") {
+				delete(s.sessions, key)
+			}
+		}
+		if err := s.save(); err != nil {
+			writeError(w, 502, err.Error())
+			return
+		}
+		w.WriteHeader(204)
+		return
 	}
 	writeError(w, 404, "not found")
 }
@@ -346,6 +425,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	agentMsg, err := s.waitReply(r.Context(), sessionID, userMsg.GetMessageId())
 	if err != nil {
+		s.failActive(projectID)
 		writeError(w, 504, "agent 回复超时：worker 在跑但模型太慢，稍后可刷新查看")
 		return
 	}

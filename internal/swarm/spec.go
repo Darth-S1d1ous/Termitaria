@@ -27,6 +27,7 @@ type Spec struct {
 	Name   string
 	Goal   string
 	Agents []AgentSpec
+	Raw    string // 原始 YAML，创建项目时原样回给前端
 }
 
 type specFile struct {
@@ -40,27 +41,53 @@ func LoadFile(path string) (*Spec, error) {
 	if err != nil {
 		return nil, err
 	}
+	spec, err := Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return spec, nil
+}
+
+// Parse 编译一份 SwarmSpec YAML。恰好一个 ORCHESTRATOR，agent id 不重复。
+func Parse(raw []byte) (*Spec, error) {
 	var f specFile
 	if err := yaml.Unmarshal(raw, &f); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse swarm spec: %w", err)
 	}
-	if f.Name == "" || len(f.Agents) == 0 {
-		return nil, fmt.Errorf("%s: name/agents 不能为空", path)
+	if f.Name == "" || strings.TrimSpace(f.Goal) == "" || len(f.Agents) == 0 {
+		return nil, fmt.Errorf("name、goal、agents 不能为空")
 	}
+	seen := map[string]bool{}
+	orchestrators := 0
 	for i := range f.Agents {
 		a := &f.Agents[i]
 		if a.ID == "" {
-			return nil, fmt.Errorf("%s: agent #%d 缺 id", path, i)
+			return nil, fmt.Errorf("agent #%d 缺 id", i)
 		}
+		if seen[a.ID] {
+			return nil, fmt.Errorf("agent id %s 重复", a.ID)
+		}
+		seen[a.ID] = true
 		if a.DisplayName == "" {
 			a.DisplayName = a.ID
 		}
 		if a.Kind == "" {
 			a.Kind = "WORKER"
 		}
+		if a.Kind == "ORCHESTRATOR" {
+			orchestrators++
+		}
 		a.RolePrompt = strings.TrimSpace(a.RolePrompt)
 	}
-	return &Spec{Name: f.Name, Goal: strings.TrimSpace(f.Goal), Agents: f.Agents}, nil
+	if orchestrators != 1 {
+		return nil, fmt.Errorf("需要恰好一个 ORCHESTRATOR，现在是 %d 个", orchestrators)
+	}
+	return &Spec{
+		Name:   f.Name,
+		Goal:   strings.TrimSpace(f.Goal),
+		Agents: f.Agents,
+		Raw:    string(raw),
+	}, nil
 }
 
 // LoadDir 读目录下全部 *.yaml，按文件名排序，保证项目列表稳定。

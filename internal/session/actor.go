@@ -74,6 +74,15 @@ type snapshotCmd struct {
 	result      chan Snapshot
 }
 
+type dropCmd struct {
+	done chan struct{}
+}
+
+func (c dropCmd) apply(a *Actor) {
+	a.dropped = true
+	close(c.done)
+}
+
 func (c snapshotCmd) apply(a *Actor) {
 	ids := a.order
 	if c.windowLimit > 0 && len(ids) > c.windowLimit {
@@ -98,6 +107,7 @@ type Actor struct {
 	order    []string
 	mailbox  chan command
 	onExit   func(sessionID string)
+	dropped  bool
 }
 
 func newActor(b *bus.Bus, onExit func(string)) *Actor {
@@ -253,6 +263,9 @@ func (a *Actor) close(ctx context.Context, reason, traceID string) error {
 // 注意：oneof 的包装接口 isSessionEvent 在生成代码里不导出，
 // 所以这里收组装好的 *SessionEvent，由本函数补上 session/swarm 标识。
 func (a *Actor) publish(ctx context.Context, traceID string, event *sessionv1.SessionEvent) error {
+	if a.dropped {
+		return ErrSessionClosed
+	}
 	event.SessionId = a.state.GetSessionId()
 	event.SwarmId = a.state.GetSwarmId()
 	if _, err := a.bus.Publish(ctx, bus.SessionSubject(a.state.GetSwarmId(), a.state.GetSessionId()), producer, traceID, event); err != nil {

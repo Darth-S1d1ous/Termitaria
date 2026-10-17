@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "nats-py>=2.10",
     "protobuf>=7.36.1",   # gen/python 的 pb2 由 protoc 7.36.1 生成，runtime 不能更旧
+    "grpcio>=1.71",       # graph 服务的 grpc.aio
     "langgraph>=0.2",
     "langchain-nvidia-ai-endpoints>=0.3",
     "ulid-py>=1.1",
