@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from .model import DEFAULT_MAX_TOKENS, DEFAULT_MODEL, ModelConfig
 
@@ -32,5 +33,30 @@ class WorkerConfig:
                 temperature=float(os.environ.get("NVIDIA_TEMPERATURE", "1")),
                 max_tokens=int(os.environ.get("NVIDIA_MAX_TOKENS", str(DEFAULT_MAX_TOKENS))),
                 timeout=float(os.environ.get("NVIDIA_TIMEOUT", "300")),
+                provider=os.environ.get("MODEL_PROVIDER", ""),
+                deepseek_api_key=os.environ.get("DEEPSEEK_API_KEY", "") or _secret(
+                    "deepseek-secrets", "TERMITARIA_API"
+                ),
+                deepseek_model=os.environ.get("DEEPSEEK_MODEL", "deepseek-flash"),
+                deepseek_base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+                nebius_api_key=os.environ.get("NEBIUS_API_KEY", ""),
+                nebius_base_url=os.environ.get(
+                    "NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.com/v1"
+                ),
             ),
         )
+
+
+def _secret(filename: str, key: str) -> str:
+    """从 ~/.secrets 读一行 KEY=value。文件不存在就当没配。"""
+    path = Path.home() / ".secrets" / filename
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    prefix = key + "="
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(prefix):
+            return line[len(prefix):].strip().strip('"').strip("'")
+    return ""

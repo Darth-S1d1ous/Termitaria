@@ -7,16 +7,21 @@ from termitaria.common.v1 import common_pb2
 
 
 class _Chunk:
-    def __init__(self, content="", reasoning="", usage=None):
+    def __init__(self, content="", reasoning="", usage=None, tool_call_chunks=None):
         self.content = content
         self.additional_kwargs = {"reasoning_content": reasoning} if reasoning else {}
         self.usage_metadata = usage
+        self.tool_call_chunks = tool_call_chunks or []
 
 
 class _Client:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.messages = None
+
+    def bind_tools(self, tools, **kwargs):
+        self.bound = tools
+        return self
 
     async def astream(self, messages):
         self.messages = messages
@@ -91,8 +96,47 @@ def test_explicit_model_keeps_task_budget():
         max_tokens=1024,
     )
     assert seen["model"] == "deepseek-ai/deepseek-v4.1-flash"
-    assert seen["max_completion_tokens"] == 1024
+    assert seen["max_completion_tokens"] == 16384
     assert seen["temperature"] == 0.2
+    _run(
+        model,
+        system="",
+        window=[("a", "hi")],
+        model=_ref("deepseek-ai/deepseek-v4.1-flash"),
+        max_tokens=20000,
+    )
+    assert seen["max_completion_tokens"] == 20000
+
+
+def test_native_tool_chunks_become_calls():
+    from services.worker.calls import Call
+
+    class Calling(_Client):
+        async def astream(self, messages):
+            self.messages = messages
+            yield _Chunk(
+                content="",
+                tool_call_chunks=[{
+                    "index": 0,
+                    "id": "call_9",
+                    "name": "web_search",
+                    "args": "{\"query\":\"tsla\"}",
+                }],
+                usage={"input_tokens": 2, "output_tokens": 3},
+            )
+
+    model = NvidiaModel("k", client_factory=lambda **kwargs: Calling(**kwargs))
+    events = _run(
+        model,
+        system="s",
+        window=[("u", "查")],
+        model=_ref("deepseek-ai/deepseek-v4.1-flash"),
+        max_tokens=20000,
+        tools=[{"type": "function", "function": {"name": "web_search"}}],
+    )
+    calls = [ev for ev in events if isinstance(ev, Call)]
+    assert calls[0].name == "web_search"
+    assert calls[0].arguments == {"query": "tsla"}
 
 
 def test_select_model_without_key_is_stub():

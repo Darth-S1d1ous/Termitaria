@@ -41,6 +41,13 @@ const TaskResultAll = "tasks.*.result.*"
 // TaskDeltaAll 是全部流式增量（core NATS）。Gateway 转成 message.delta。
 const TaskDeltaAll = "tasks.*.delta.*"
 
+// TaskCancel 通知 worker 停掉还在跑的推理。core NATS，不进队列。
+func TaskCancel(taskID string) string {
+	return "tasks.cancel." + taskID
+}
+
+const TaskCancelAll = "tasks.cancel.*"
+
 // PresenceSubject 是 worker 上下线信号（core NATS，不进 JetStream）。
 // 契约规定 presence 不落 bus；这里只作进程间瞬时信号，Gateway 再扇出到 WS。
 func PresenceSubject(agentID string) string {

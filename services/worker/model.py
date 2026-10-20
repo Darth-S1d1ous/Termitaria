@@ -1,8 +1,8 @@
 """模型出口（架构 §4 LLM client 的替换点）。
 
 ModelPort 是协议。StubModel 产出确定性假流，供离线测试与未配 key 时的链路验收。
-具体提供商在各自模块里实现（目前是 nvidia.NvidiaModel）；select_model 是唯一装配点。
-graph / runner 只依赖 stream()。
+具体提供商在 adapters 里装配（nvidia.NvidiaModel、Nebius、DeepSeek 官方）。
+select_model 是唯一装配点。graph / runner 只依赖 stream()。
 """
 from __future__ import annotations
 
@@ -38,13 +38,20 @@ DEFAULT_MAX_TOKENS = 16384
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """一个模型出口的运行参数。有 api_key 才实例化真实提供商。"""
+    """一个模型出口的运行参数。有 api_key 才实例化 NVIDIA。"""
 
     api_key: str = ""
     model: str = DEFAULT_MODEL
     temperature: float = 1.0
     max_tokens: int = DEFAULT_MAX_TOKENS
     timeout: float = 300.0
+    # 空字符串保持原装配：有 NVIDIA key 走 Catalog，否则 StubModel。
+    provider: str = ""
+    deepseek_api_key: str = ""
+    deepseek_model: str = "deepseek-flash"
+    deepseek_base_url: str = "https://api.deepseek.com"
+    nebius_api_key: str = ""
+    nebius_base_url: str = "https://api.tokenfactory.nebius.com/v1"
 
 
 class ModelPort(Protocol):
@@ -55,10 +62,12 @@ class ModelPort(Protocol):
         window: list[tuple[str, str]],
         model: common_pb2.ModelRef,
         max_tokens: int,
+        tools: list | None = None,
     ) -> AsyncIterator[ModelEvent]:
         """流式产出文本增量，最后一个事件必须是 Done(usage)。
 
         model.model 是 Go 侧解析好的模型名。占位名 stub-model 由具体提供商换成自己的默认模型。
+        tools 是发给模型的函数声明。有原生调用时，具体模型在正文之外另行交出。
         """
         ...
 
@@ -76,7 +85,9 @@ class StubModel:
         window: list[tuple[str, str]],
         model: common_pb2.ModelRef,
         max_tokens: int,
+        tools: list | None = None,
     ) -> AsyncIterator[ModelEvent]:
+        del tools
         last = window[-1][1] if window else ""
         text = (
             f"[stub:{model.model or 'unspecified'}] 窗口 {len(window)} 条消息"
@@ -101,19 +112,10 @@ class StubModel:
 
 
 def select_model(cfg: ModelConfig | None = None):
-    """有 key 时走 NVIDIA API Catalog，否则 StubModel。"""
-    cfg = cfg or ModelConfig()
-    if not cfg.api_key:
-        return StubModel()
-    from .nvidia import NvidiaModel
+    """按 provider 装配。未指定时与原来一样：有 NVIDIA key 走 Catalog，否则 StubModel。"""
+    from .adapters import build_model
 
-    return NvidiaModel(
-        cfg.api_key,
-        default_model=cfg.model,
-        temperature=cfg.temperature,
-        max_completion_tokens=cfg.max_tokens,
-        timeout=cfg.timeout,
-    )
+    return build_model(cfg or ModelConfig())
 
 
 def _split_chunks(text: str, n: int) -> list[str]:

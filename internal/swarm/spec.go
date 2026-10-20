@@ -14,10 +14,11 @@ import (
 )
 
 type AgentSpec struct {
-	ID          string `yaml:"id"`
-	DisplayName string `yaml:"displayName"`
-	Kind        string `yaml:"kind"`
-	RolePrompt  string `yaml:"rolePrompt"`
+	ID          string   `yaml:"id"`
+	DisplayName string   `yaml:"displayName"`
+	Kind        string   `yaml:"kind"`
+	RolePrompt  string   `yaml:"rolePrompt"`
+	Tools       []string `yaml:"tools"`
 	Budget      struct {
 		MaxTokens uint32 `yaml:"maxTokens"`
 	} `yaml:"budget"`

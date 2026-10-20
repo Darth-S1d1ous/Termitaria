@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -80,7 +81,7 @@ func TestCreateFromSpecPullsAgentsAndRoutesChats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := New(manager, []*swarm.Spec{boot}, filepath.Join(t.TempDir(), "state.json"), time.Second, hub, regStart{reg, hub})
+	srv, err := New(manager, []*swarm.Spec{boot}, filepath.Join(t.TempDir(), "state.json"), time.Second, hub, regStart{reg, hub}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,4 +246,167 @@ func fetchTask(t *testing.T, b *bus.Bus, swarmID, agentID string) (*taskv1.Task,
 		return &task, true
 	}
 	return nil, false
+}
+
+func TestUpdateStepMarksDone(t *testing.T) {
+	srv, _ := testServer(t)
+	httpSrv := httptest.NewServer(srv.Handler())
+	t.Cleanup(httpSrv.Close)
+	created := createField(t, httpSrv.URL)
+	res := postJSON(t, httpSrv.URL+"/api/projects/"+created.ID+"/steps", map[string]string{
+		"label": "find a gap",
+		"state": "done",
+	})
+	if res.StatusCode != 200 {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	res.Body.Close()
+	got := projectByID(t, httpSrv.URL, created.ID)
+	if len(got.Steps) != 1 || got.Steps[0].State != "done" {
+		t.Fatalf("steps = %+v", got.Steps)
+	}
+}
+
+func TestDelegateOpensSessionThenTimesOut(t *testing.T) {
+	old := delegateWait
+	delegateWait = 200 * time.Millisecond
+	t.Cleanup(func() { delegateWait = old })
+	srv, manager := testServer(t)
+	httpSrv := httptest.NewServer(srv.Handler())
+	t.Cleanup(httpSrv.Close)
+	created := createField(t, httpSrv.URL)
+	res := postJSON(t, httpSrv.URL+"/api/projects/"+created.ID+"/delegate", map[string]string{
+		"from": "pi", "coworker": "collector", "task": "去把文献过一遍", "context": "没有现成材料",
+	})
+	if res.StatusCode != 504 {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	res.Body.Close()
+	list, err := manager.ListSessions(context.Background(), created.ID, sessionv1.SessionState_SESSION_STATE_UNSPECIFIED)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saw bool
+	for _, sess := range list {
+		snap, err := manager.Snapshot(context.Background(), sess.GetSessionId(), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, msg := range snap.Window {
+			if msg.GetFrom().GetAgentId() == "pi" && strings.Contains(messageText(msg), "文献过一遍") {
+				saw = true
+			}
+		}
+	}
+	if !saw {
+		t.Fatal("delegate did not open a spoke")
+	}
+}
+
+func TestSpecsReloadWithoutRestart(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.yaml"), []byte(miniSpec("alpha")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := swarm.LoadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := testutil.NewBus(t)
+	manager := session.NewManager(b)
+	reg := dispatcher.NewRegistry()
+	hub := live.New()
+	srv, err := New(manager, loaded, filepath.Join(t.TempDir(), "state.json"), time.Second, hub, regStart{reg, hub}, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpSrv := httptest.NewServer(srv.Handler())
+	t.Cleanup(httpSrv.Close)
+	if !specListed(t, httpSrv.URL, "alpha") {
+		t.Fatal("alpha missing")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.yaml"), []byte(miniSpec("beta")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !specListed(t, httpSrv.URL, "beta") {
+		t.Fatal("beta missing after reload")
+	}
+}
+
+func testServer(t *testing.T) (*Server, *session.Manager) {
+	t.Helper()
+	b := testutil.NewBus(t)
+	manager := session.NewManager(b)
+	reg := dispatcher.NewRegistry()
+	hub := live.New()
+	boot, err := swarm.Parse([]byte(fieldSpec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := New(manager, []*swarm.Spec{boot}, filepath.Join(t.TempDir(), "state.json"), time.Second, hub, regStart{reg, hub}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv, manager
+}
+
+func createField(t *testing.T, base string) projectJSON {
+	t.Helper()
+	res := postJSON(t, base+"/api/projects", map[string]string{"name": "Field Lab", "spec": fieldSpec})
+	if res.StatusCode != 201 {
+		t.Fatalf("create status = %d", res.StatusCode)
+	}
+	defer res.Body.Close()
+	var created projectJSON
+	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	return created
+}
+
+func projectByID(t *testing.T, base, id string) projectJSON {
+	t.Helper()
+	res, err := http.Get(base + "/api/projects")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var body struct {
+		Projects []projectJSON `json:"projects"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	for _, project := range body.Projects {
+		if project.ID == id {
+			return project
+		}
+	}
+	t.Fatalf("project %s missing", id)
+	return projectJSON{}
+}
+
+func specListed(t *testing.T, base, name string) bool {
+	t.Helper()
+	res, err := http.Get(base + "/api/swarmspecs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var body struct {
+		Specs []specJSON `json:"specs"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range body.Specs {
+		if spec.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func miniSpec(name string) string {
+	return "name: " + name + "\ngoal: ship it\nagents:\n  - id: lead\n    kind: ORCHESTRATOR\n    rolePrompt: lead\n  - id: hand\n    rolePrompt: hand\n"
 }

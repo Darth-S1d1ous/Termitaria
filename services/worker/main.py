@@ -27,8 +27,9 @@ async def amain() -> None:
     nc = await nats.connect(cfg.nats_url, name="termitaria-worker")
     model = select_model(cfg.model)
     logging.getLogger(__name__).info(
-        "model source: %s",
-        cfg.model.model if cfg.model.api_key else "stub",
+        "model source: %s %s",
+        getattr(model, "provider", type(model).__name__),
+        getattr(model, "default_model", ""),
     )
     runner = TaskRunner(nc, model, cfg.producer)
     if cfg.agent_ids:

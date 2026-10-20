@@ -129,7 +129,7 @@ func main() {
 		if len(specs) == 0 {
 			log.Fatalf("gateway 需要 SwarmSpec 模板：-swarmdir %s 无可读 spec", *swarmDir)
 		}
-		gw, err := gateway.New(manager, specs, *statePath, time.Duration(*replyTimeoutMs)*time.Millisecond, hub, started)
+		gw, err := gateway.New(manager, specs, *statePath, time.Duration(*replyTimeoutMs)*time.Millisecond, hub, started, *swarmDir)
 		if err != nil {
 			log.Fatalf("gateway state: %v", err)
 		}

@@ -161,6 +161,10 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 	if sess.GetState() != sessionv1.SessionState_SESSION_STATE_OPEN {
 		return nil // 挂起（max_turns 耗尽）/ 关闭：不再触发
 	}
+	// 轮次已经走到上限就不要再叫醒下一个人。挂起事件可能还没被这次快照看见。
+	if mt := sess.GetPolicy().GetMaxTurns(); mt > 0 && sess.GetTurnIndex() >= mt {
+		return nil
+	}
 	next := nextSpeaker(sess, msg)
 	if next == nil {
 		return nil

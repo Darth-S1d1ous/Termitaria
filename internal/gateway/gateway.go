@@ -41,9 +41,10 @@ var (
 )
 
 type agentJSON struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name"`
-	Kind        string `json:"kind"`
+	ID          string   `json:"id"`
+	DisplayName string   `json:"display_name"`
+	Kind        string   `json:"kind"`
+	Tools       []string `json:"tools,omitempty"`
 }
 
 type projectJSON struct {
@@ -82,12 +83,14 @@ type Server struct {
 
 	mu       sync.Mutex
 	path     string
+	swarmDir string
 	projects []*projectJSON
 	sessions map[string]string
+	inflight map[string]struct{} // project/agent：这个同事已经有一单在做
 }
 
 // New 装载状态文件；首次启动为每个 spec 建一个默认项目（id = spec 名）。
-func New(manager *session.Manager, specs []*swarm.Spec, statePath string, replyTimeout time.Duration, hub *live.Hub, starter AgentStarter) (*Server, error) {
+func New(manager *session.Manager, specs []*swarm.Spec, statePath string, replyTimeout time.Duration, hub *live.Hub, starter AgentStarter, swarmDir string) (*Server, error) {
 	if hub == nil {
 		hub = live.New()
 	}
@@ -97,7 +100,9 @@ func New(manager *session.Manager, specs []*swarm.Spec, statePath string, replyT
 		replyTimeout: replyTimeout,
 		hub:          hub,
 		path:         statePath,
+		swarmDir:     swarmDir,
 		sessions:     map[string]string{},
+		inflight:     map[string]struct{}{},
 	}
 	for _, spec := range specs {
 		s.specs = append(s.specs, specJSON{Name: spec.Name, Goal: spec.Goal, YAML: spec.Raw})
@@ -141,7 +146,7 @@ func projectFromSpec(id string, spec *swarm.Spec) *projectJSON {
 		Goal: spec.Goal,
 	}
 	for _, a := range spec.Agents {
-		p.Agents = append(p.Agents, agentJSON{ID: a.ID, DisplayName: a.DisplayName, Kind: a.Kind})
+		p.Agents = append(p.Agents, agentJSON{ID: a.ID, DisplayName: a.DisplayName, Kind: a.Kind, Tools: append([]string(nil), a.Tools...)})
 	}
 	return p
 }
@@ -179,6 +184,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/chats/{chat}/messages", s.listMessages)
 	mux.HandleFunc("POST /api/projects/{id}/chats/{chat}/messages", s.postMessage)
 	mux.HandleFunc("GET /api/projects/{id}/topology", s.topology)
+	mux.HandleFunc("POST /api/projects/{id}/delegate", s.delegate)
+	mux.HandleFunc("POST /api/projects/{id}/steps", s.updateStep)
 	mux.HandleFunc("GET /api/ws", s.serveWS)
 	return cors(mux)
 }
@@ -210,7 +217,25 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listSpecs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"specs": s.specs})
+	// 目录在进程启动后还会增删。每次打开向导都重读，新 SwarmSpec 不用重启就能出现在模板里。
+	if s.swarmDir != "" {
+		if loaded, err := swarm.LoadDir(s.swarmDir); err != nil {
+			log.Printf("reload swarmdir %s: %v", s.swarmDir, err)
+		} else {
+			specs := make([]specJSON, 0, len(loaded))
+			for _, spec := range loaded {
+				s.startSpec(spec)
+				specs = append(specs, specJSON{Name: spec.Name, Goal: spec.Goal, YAML: spec.Raw})
+			}
+			s.mu.Lock()
+			s.specs = specs
+			s.mu.Unlock()
+		}
+	}
+	s.mu.Lock()
+	specs := append([]specJSON(nil), s.specs...)
+	s.mu.Unlock()
+	writeJSON(w, 200, map[string]any{"specs": specs})
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -496,7 +521,11 @@ func (s *Server) ensureSession(ctx context.Context, projectID, key, agentID stri
 // waitReply 轮询窗口，等 worker 结果经 dispatcher 落流（reply_to = 触发消息）。
 // worker FAILED 不落消息，只能等超时——orchestrator 介入是 Slice C 的事。
 func (s *Server) waitReply(ctx context.Context, sessionID, userMsgID string) (*sessionv1.Message, error) {
-	deadline := time.Now().Add(s.replyTimeout)
+	return s.waitReplyFor(ctx, sessionID, userMsgID, s.replyTimeout)
+}
+
+func (s *Server) waitReplyFor(ctx context.Context, sessionID, userMsgID string, timeout time.Duration) (*sessionv1.Message, error) {
+	deadline := time.Now().Add(timeout)
 	for {
 		snap, err := s.manager.Snapshot(ctx, sessionID, 0)
 		if err != nil {

@@ -14,6 +14,7 @@ import {
 } from "../lib/api";
 import { AnimalIcon, markFor } from "../lib/animals";
 import { colorFor, formatTime, initials, preview, statusLine } from "../lib/format";
+import { MessageBody } from "../lib/markdown";
 import { deleteSeeds, loadSeeds, saveSeeds, type Seed } from "../lib/seeds";
 import type { Chat, ChatMessage, MeshEdge, Project, ProjectStep, View } from "../lib/types";
 import {
@@ -597,6 +598,11 @@ export function AppShell() {
           onNotice={setError}
           onDraft={setDraft}
           onSend={onSend}
+          onOpenAgent={(agentId) => {
+            setChatId(agentId);
+            setProjectPane("chats");
+            setView("chats");
+          }}
           onBack={() => setChatId(null)}
         />
       )}
@@ -697,6 +703,7 @@ function Conversation({
   onNotice,
   onDraft,
   onSend,
+  onOpenAgent,
   onBack,
 }: {
   chat: Chat | null;
@@ -714,6 +721,7 @@ function Conversation({
   onNotice: (message: string) => void;
   onDraft: (value: string) => void;
   onSend: () => void;
+  onOpenAgent: (agentId: string) => void;
   onBack: () => void;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
@@ -807,7 +815,7 @@ function Conversation({
                 <span className="msg-name">{message.sender || message.agent_id}</span>
               ) : null}
               <div className="bubble">
-                {message.text}
+                <MessageBody text={message.text} agents={agents} onOpen={onOpenAgent} />
                 <time dateTime={new Date(message.created_at_ms).toISOString()}>{formatTime(message.created_at_ms)}</time>
               </div>
             </article>

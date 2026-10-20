@@ -27,6 +27,14 @@ func NewManager(b *bus.Bus) *Manager {
 	return &Manager{bus: b, actors: make(map[string]*Actor), dropped: map[string]bool{}}
 }
 
+// CancelTask 让 worker 停掉这个 task。派活超时后调用，避免旧推理继续占着模型。
+func (m *Manager) CancelTask(taskID string) error {
+	if m == nil || m.bus == nil || taskID == "" {
+		return nil
+	}
+	return m.bus.Conn().Publish(bus.TaskCancel(taskID), []byte(taskID))
+}
+
 func (m *Manager) OpenSession(
 	ctx context.Context,
 	swarmID string,

@@ -1,4 +1,5 @@
 .DS_Store
+.vscode/
 
 # buf generate
 gen/
@@ -25,6 +26,9 @@ var/
 
 # local client state (projects and user-visible chats)
 data/
+
+# Tesla brief runs (spec and generated report)
+examples/tsla/
 
 crewAI
 loop_mem_benchmark

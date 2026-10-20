@@ -47,6 +47,7 @@ class AgentConsumer:
         self._runner = runner
         self._cfg = cfg
         self._seen: set[str] = set()  # 内存级幂等表；MVP 不持久化
+        self._running: dict[str, asyncio.Task] = {}
         self._sem = asyncio.Semaphore(cfg.concurrency)
 
     @property
@@ -66,6 +67,7 @@ class AgentConsumer:
         # 全队列模式不在这里报在线：agent 由 SwarmSpec / 创建项目时登记。
         if self._agent_id:
             await self._nc.publish(f"presence.{self._agent_id}", b"online")
+        await self._nc.subscribe("tasks.cancel.*", cb=self._on_cancel)
         try:
             await self._loop()
         finally:
@@ -106,20 +108,34 @@ class AgentConsumer:
             return
 
         heartbeat = asyncio.create_task(self._heartbeat(msg))
+        self._running[task.task_id] = asyncio.current_task()
         try:
             await self._runner.run(task, env.trace_id)
+        except asyncio.CancelledError:
+            # 派活超时。ack 掉，避免 JetStream 把同一单再投一次。
+            log.info("task %s cancelled", task.task_id)
+            await msg.ack()
+            return
         except Exception:
             # result 没发出去（多半是 NATS 抖动）→ nak 让 JetStream 重投
             log.exception("task %s failed before result, nak", task.task_id)
             await msg.nak()
             return
         finally:
+            self._running.pop(task.task_id, None)
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
 
         self._seen.add(task.task_id)
         await msg.ack()
         log.info("task %s done (trace=%s)", task.task_id, env.trace_id)
+
+    async def _on_cancel(self, msg) -> None:
+        task_id = msg.subject.removeprefix("tasks.cancel.")
+        running = self._running.get(task_id)
+        if running is not None and not running.done():
+            log.info("cancel %s", task_id)
+            running.cancel()
 
     @staticmethod
     async def _heartbeat(msg) -> None:

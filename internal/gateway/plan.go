@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"strings"
 
 	sessionv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/session/v1"
@@ -104,6 +106,89 @@ func (s *Server) announcePlan(ctx context.Context, p *projectJSON) error {
 		[]*sessionv1.ContentBlock{{Block: &sessionv1.ContentBlock_Text{Text: planText(p.Steps)}}},
 		"", ulid.Make().String(), "")
 	return err
+}
+
+// updateStep 让模型把进度条往前推。label 可以是步骤 id，也可以是标签里的一段文字。
+func (s *Server) updateStep(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	var body struct {
+		Label string `json:"label"`
+		State string `json:"state"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, 400, "bad json")
+		return
+	}
+	state := strings.TrimSpace(body.State)
+	switch state {
+	case "pending", "active", "done", "failed":
+	default:
+		writeError(w, 400, "state 必须是 pending、active、done 或 failed")
+		return
+	}
+	s.mu.Lock()
+	var steps []stepJSON
+	for _, p := range s.projects {
+		if p.ID != projectID {
+			continue
+		}
+		idx := matchStep(p.Steps, body.Label)
+		if idx < 0 {
+			s.mu.Unlock()
+			writeError(w, 404, "没有这一步")
+			return
+		}
+		p.Steps[idx].State = state
+		if state == "done" {
+			busy := false
+			for _, step := range p.Steps {
+				if step.State == "active" {
+					busy = true
+					break
+				}
+			}
+			if !busy {
+				for i := range p.Steps {
+					if p.Steps[i].State == "pending" {
+						p.Steps[i].State = "active"
+						break
+					}
+				}
+			}
+		}
+		steps = p.Steps
+		if err := s.save(); err != nil {
+			s.mu.Unlock()
+			writeError(w, 502, err.Error())
+			return
+		}
+		break
+	}
+	s.mu.Unlock()
+	if steps == nil {
+		writeError(w, 404, "not found")
+		return
+	}
+	s.broadcast(projectID, map[string]any{"type": "plan", "steps": steps})
+	writeJSON(w, 200, map[string]any{"steps": steps})
+}
+
+func matchStep(steps []stepJSON, label string) int {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return -1
+	}
+	for i, step := range steps {
+		if step.ID == label || step.Label == label {
+			return i
+		}
+	}
+	for i, step := range steps {
+		if strings.Contains(step.Label, label) || strings.Contains(label, step.Label) {
+			return i
+		}
+	}
+	return -1
 }
 
 func (s *Server) failActive(projectID string) {

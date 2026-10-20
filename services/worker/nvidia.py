@@ -11,9 +11,12 @@ from typing import AsyncIterator, Callable
 from termitaria.common.v1 import common_pb2
 from termitaria.task.v1 import task_pb2
 
+from .calls import extract_tool_call
 from .model import DEFAULT_MAX_TOKENS, DEFAULT_MODEL, Chunk, Done, ModelEvent
 
 _PLACEHOLDER_MODELS = {"", "stub-model"}
+# 推理和正文共用这一上限。规格里的 4096 会被一次推理吃光，摘要出不来。
+_MIN_COMPLETION_TOKENS = 16384
 
 
 class NvidiaModel:
@@ -43,13 +46,27 @@ class NvidiaModel:
         window: list[tuple[str, str]],
         model: common_pb2.ModelRef,
         max_tokens: int,
+        tools: list | None = None,
     ) -> AsyncIterator[ModelEvent]:
         name, limit = self._resolve(model, max_tokens)
         client = self._client(name, limit)
+        try:
+            async for event in self._read(client, system, window, name, tools):
+                yield event
+        except Exception:
+            if not tools:
+                raise
+            # 这个模型不吃函数声明时，退回正文里的 JSON。
+            async for event in self._read(client, system, window, name, None):
+                yield event
+
+    async def _read(self, client, system: str, window, name: str, tools: list | None):
+        runnable = client.bind_tools(tools) if tools else client
         prompt_tokens = 0
         completion_tokens = 0
-        saw_content = False
-        async for chunk in client.astream(_messages(system, window)):
+        parts: list[str] = []
+        pending: dict = {}
+        async for chunk in runnable.astream(_messages(system, window)):
             got_in, got_out = _read_usage(chunk)
             if got_in or got_out:
                 prompt_tokens, completion_tokens = got_in, got_out
@@ -57,9 +74,17 @@ class NvidiaModel:
             # 预算不够时推理被截成「!!!!」且永远没有正文。
             text = _chunk_text(chunk)
             if text:
-                saw_content = True
-                yield Chunk(text)
-        if not saw_content:
+                parts.append(text)
+            _collect_calls(pending, chunk)
+        if parts:
+            yield Chunk("".join(parts))
+        emitted = False
+        for slot in pending.values():
+            call = extract_tool_call(slot)
+            if call is not None:
+                emitted = True
+                yield call
+        if not parts and not emitted:
             raise RuntimeError(
                 "model returned no content; reasoning was truncated or empty"
             )
@@ -77,7 +102,10 @@ class NvidiaModel:
         name = model.model or ""
         if name in _PLACEHOLDER_MODELS:
             return self._default_model, self._max_completion_tokens
-        return name, max_tokens or self._max_completion_tokens
+        limit = max_tokens or self._max_completion_tokens
+        if limit < _MIN_COMPLETION_TOKENS:
+            limit = _MIN_COMPLETION_TOKENS
+        return name, limit
 
     def _client(self, name: str, limit: int):
         key = (name, limit, self._temperature, self._timeout)
@@ -108,6 +136,40 @@ def _messages(system: str, window: list[tuple[str, str]]) -> list[dict]:
         body = f"{sender}: {text}" if sender else text
         msgs.append({"role": "user", "content": body})
     return msgs
+
+
+def _collect_calls(pending: dict, chunk) -> None:
+    found = list(getattr(chunk, "tool_call_chunks", None) or [])
+    extra = (getattr(chunk, "additional_kwargs", None) or {}).get("tool_calls") or []
+    found.extend(extra)
+    for index, raw in enumerate(found):
+        if isinstance(raw, dict):
+            key = raw.get("index")
+            name = raw.get("name") or (raw.get("function") or {}).get("name")
+            args = raw.get("args")
+            if args is None and isinstance(raw.get("function"), dict):
+                args = raw["function"].get("arguments")
+            call_id = raw.get("id") or ""
+            base = raw
+        else:
+            key = getattr(raw, "index", None)
+            name = getattr(raw, "name", None)
+            args = getattr(raw, "args", None)
+            call_id = getattr(raw, "id", "") or ""
+            base = {}
+        if key is None:
+            key = call_id or name or index
+        slot = pending.setdefault(key, {"id": call_id, "name": "", "arguments": ""})
+        if call_id:
+            slot["id"] = call_id
+        if name:
+            slot["name"] = name
+        if isinstance(args, str):
+            slot["arguments"] = f"{slot.get('arguments') or ''}{args}"
+        elif isinstance(args, dict):
+            slot["arguments"] = args
+        elif base:
+            slot.update({k: v for k, v in base.items() if k not in slot or not slot[k]})
 
 
 def _chunk_text(chunk) -> str:
