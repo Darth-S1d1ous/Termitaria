@@ -60,11 +60,11 @@ class Toolbox:
         if not self.tools:
             return ""
         lines = [
-            "需要查资料、派活或写文件时，调用提供给你的函数。",
-            "这次请求里有函数时，使用函数调用。不要把调用写进给用户看的正文。",
-            "信息够了就用普通中文作最终答复，不要再调用函数。",
-            "如果这次请求没有函数，而你仍必须调用工具，就只回复 JSON，一行一个：",
-            '{"tool":"工具名","参数名":"参数值"}',
+            "When you need to look something up, delegate, or write a file, call the function you were given.",
+            "If this request includes functions, use a function call. Do not put the call in the text the user sees.",
+            "When you have enough information, reply in plain English and do not call another function.",
+            "If this request has no functions and you still must use a tool, reply with JSON only, one object per line:",
+            '{"tool":"tool_name","param":"value"}',
         ]
         for tool in self.tools.values():
             lines.append(f"- {tool.name}: {tool.description}")
@@ -93,11 +93,11 @@ class Toolbox:
         name = _ALIASES.get(name, name)
         tool = self.tools.get(name)
         if tool is None:
-            return f"没有工具 {name}。可用：{', '.join(self.tools) or '无'}"
+            return f"No tool named {name}. Available: {', '.join(self.tools) or 'none'}"
         try:
             return await tool.run(arguments)
         except Exception as exc:
-            return f"{name} 失败：{exc}"
+            return f"{name} failed: {exc}"
 
 
 def visible_text(text: str) -> str:
@@ -189,33 +189,33 @@ def make_toolbox(
     if "web_search" in names:
         tools.append(Tool(
             "web_search",
-            "在网上搜 query，返回标题、链接和一小段摘要。",
+            "Search the web for query. Return titles, links, and a short snippet.",
             _web_search,
-            {"query": {"type": "string", "description": "搜索词"}},
+            {"query": {"type": "string", "description": "search query"}},
             ["query"],
         ))
     if "fetch_url" in names:
         tools.append(Tool(
             "fetch_url",
-            "打开 url，返回页面正文。PDF 会尽量抽出文字。",
+            "Open url and return the page text. PDFs are extracted when possible.",
             _fetch_url,
-            {"url": {"type": "string", "description": "http 或 https 地址"}},
+            {"url": {"type": "string", "description": "http or https URL"}},
             ["url"],
         ))
     if "utc_time" in names:
         tools.append(Tool(
             "utc_time",
-            "日期和 unix 秒互转。date 用 YYYY-MM-DD，按 UTC 零点换算；unix 用秒，换回 UTC 日期。不要心算。",
+            "Convert a date and unix seconds. date is YYYY-MM-DD at 00:00 UTC. unix is seconds, converted back to a UTC date. Do not calculate this yourself.",
             _utc_time,
             {
-                "date": {"type": "string", "description": "YYYY-MM-DD，按 UTC 零点"},
-                "unix": {"type": "integer", "description": "unix 秒"},
+                "date": {"type": "string", "description": "YYYY-MM-DD at 00:00 UTC"},
+                "unix": {"type": "integer", "description": "unix seconds"},
             },
         ))
     if "write_file" in names:
         tools.append(Tool(
             "write_file",
-            "把 content 写到工作目录下的 path，例如 tsla_report.md。",
+            "Write content to path inside the working directory, for example notes.md.",
             _write_file,
             {
                 "path": {"type": "string"},
@@ -227,11 +227,11 @@ def make_toolbox(
         tools.append(
             Tool(
                 "delegate",
-                "把任务交给同事。参数 coworker（id 或显示名）、task（要做什么）、context（已知材料）。"
-                "同事会在自己的会话里做完，结果回到你这里。",
+                "Give a task to a coworker. coworker is an id or display name, task is what to do, and context is material you already have. "
+                "The coworker finishes in their own session and the result comes back here.",
                 _delegate(gateway, project_id, agent.get("id") or ""),
                 {
-                    "coworker": {"type": "string", "description": "同事的 id 或显示名"},
+                    "coworker": {"type": "string", "description": "coworker id or display name"},
                     "task": {"type": "string"},
                     "context": {"type": "string"},
                 },
@@ -239,12 +239,12 @@ def make_toolbox(
             )
         )
     if "plan" in names:
-        labels = "、".join(step.get("label") or step.get("id") or "" for step in steps if step.get("label") or step.get("id"))
-        hint = f"当前步骤：{labels}。" if labels else "用步骤标签当 label。"
+        labels = ", ".join(step.get("label") or step.get("id") or "" for step in steps if step.get("label") or step.get("id"))
+        hint = f"Current steps: {labels}. " if labels else "Use the step label as label. "
         tools.append(
             Tool(
                 "plan",
-                hint + "参数 label、state（pending、active、done、failed）。做完一步就标 done。",
+                hint + "Arguments are label and state (pending, active, done, failed). Mark a step done when it is finished.",
                 _plan(gateway, project_id),
                 {
                     "label": {"type": "string"},
@@ -254,13 +254,13 @@ def make_toolbox(
             )
         )
     if "kg_query" in names or "kg_write" in names or "kg" in names:
-        tools.append(Tool("kg", "知识图还没接上。", _kg))
+        tools.append(Tool("kg", "The knowledge graph is not connected.", _kg))
     if skills:
         by_name = {skill.name: skill for skill in skills}
         tools.append(
             Tool(
                 "load_skill",
-                "读取技能全文。参数 name，可选：" + "、".join(by_name) + "。",
+                "Load the full text of a skill. name is one of: " + ", ".join(by_name) + ".",
                 _load_skill(by_name),
                 {"name": {"type": "string", "enum": list(by_name)}},
                 ["name"],
@@ -270,7 +270,7 @@ def make_toolbox(
         tools.append(
             Tool(
                 f"mcp_{remote.server}_{remote.name}",
-                f"MCP {remote.server}/{remote.name}。{remote.description}".strip(),
+                f"MCP {remote.server}/{remote.name}. {remote.description}".strip(),
                 _mcp(remote),
             )
         )
@@ -283,7 +283,7 @@ def _delegate(gateway: str, project_id: str, agent_id: str) -> Runner:
         task = str(args.get("task") or "").strip()
         context = str(args.get("context") or "")
         if not coworker or not task:
-            return "delegate 需要 coworker 和 task"
+            return "delegate requires coworker and task"
         status, body = await asyncio.to_thread(
             _post_json,
             f"{gateway}/api/projects/{project_id}/delegate",
@@ -291,13 +291,13 @@ def _delegate(gateway: str, project_id: str, agent_id: str) -> Runner:
             26 * 60,
         )
         if status != 200:
-            return f"delegate {coworker} 没有完成（HTTP {status}）：{body[:500]}"
+            return f"delegate {coworker} did not finish (HTTP {status}): {body[:500]}"
         try:
             data = json.loads(body)
         except json.JSONDecodeError:
             return body[:4000]
         who = data.get("agent_id") or coworker
-        return f"{who} 回复：\n{data.get('text') or ''}"
+        return f"{who} replied:\n{data.get('text') or ''}"
 
     return run
 
@@ -307,7 +307,7 @@ def _plan(gateway: str, project_id: str) -> Runner:
         label = str(args.get("label") or args.get("step") or "").strip()
         state = str(args.get("state") or "done").strip()
         if not label:
-            return "plan 需要 label"
+            return "plan requires label"
         status, body = await asyncio.to_thread(
             _post_json,
             f"{gateway}/api/projects/{project_id}/steps",
@@ -315,8 +315,8 @@ def _plan(gateway: str, project_id: str) -> Runner:
             15,
         )
         if status != 200:
-            return f"plan 没有更新（HTTP {status}）：{body[:300]}"
-        return f"步骤「{label}」已标为 {state}"
+            return f"plan was not updated (HTTP {status}): {body[:300]}"
+        return f"Step {label!r} is now {state}"
 
     return run
 
@@ -326,7 +326,7 @@ def _load_skill(by_name: dict[str, Skill]) -> Runner:
         name = str(args.get("name") or "").strip()
         skill = by_name.get(name)
         if skill is None:
-            return "没有这个技能。可选：" + "、".join(by_name)
+            return "No such skill. Choices: " + ", ".join(by_name)
         return skill.body
 
     return run
@@ -340,13 +340,13 @@ def _mcp(remote: MCPTool) -> Runner:
 
 
 async def _kg(_: dict) -> str:
-    return "知识图还没接上。不要假装查过图。"
+    return "The knowledge graph is not connected. Do not pretend you queried it."
 
 
 async def _web_search(args: dict) -> str:
     query = str(args.get("query") or args.get("q") or "").strip()
     if not query:
-        return "web_search 需要 query"
+        return "web_search requires query"
     return await asyncio.to_thread(_search_blocking, query)
 
 
@@ -357,22 +357,22 @@ async def _utc_time(args: dict) -> str:
         try:
             day = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         except ValueError:
-            return "utc_time 的 date 要用 YYYY-MM-DD"
+            return "utc_time date must be YYYY-MM-DD"
         return f"{date} 00:00 UTC = {int(day.timestamp())}"
     if raw_unix not in (None, ""):
         try:
             ts = int(float(str(raw_unix)))
         except ValueError:
-            return "utc_time 的 unix 要是秒"
+            return "utc_time unix must be seconds"
         day = datetime.fromtimestamp(ts, timezone.utc)
         return f"{ts} = {day:%Y-%m-%d} {day:%H:%M} UTC"
-    return "utc_time 需要 date 或 unix"
+    return "utc_time requires date or unix"
 
 
 async def _fetch_url(args: dict) -> str:
     url = str(args.get("url") or "").strip()
     if not url.startswith(("http://", "https://")):
-        return "fetch_url 只接受 http 或 https"
+        return "fetch_url only accepts http or https"
     return await asyncio.to_thread(_fetch_blocking, url)
 
 
@@ -380,7 +380,7 @@ async def _write_file(args: dict) -> str:
     path = str(args.get("path") or "").strip()
     content = args.get("content")
     if not path or content is None:
-        return "write_file 需要 path 和 content"
+        return "write_file requires path and content"
     return _write_blocking(path, str(content))
 
 
@@ -391,20 +391,20 @@ def _write_blocking(path: str, content: str) -> str:
         target = root / target
     target = target.resolve()
     if target != root and root not in target.parents:
-        return f"拒绝写入 {target}。只能写在 {root} 里面。"
+        return f"Refused to write {target}. Only paths inside {root} are allowed."
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
-    return f"已写入 {target}，{len(content)} 字。"
+    return f"Wrote {target} ({len(content)} characters)."
 
 
 def _search_blocking(query: str) -> str:
     ddg = _duckduckgo(query)
-    if ddg and "没有解析到" not in ddg:
+    if ddg and "no parsed results" not in ddg:
         return ddg
     bing = _bing(query)
     if bing:
         return bing
-    return ddg or "搜索没有结果。"
+    return ddg or "The search returned no results."
 
 
 def _duckduckgo(query: str) -> str:
@@ -412,9 +412,9 @@ def _duckduckgo(query: str) -> str:
     try:
         html = _http_text(url, 20)
     except (HTTPError, URLError, TimeoutError, OSError) as exc:
-        return f"DuckDuckGo 搜索失败：{exc}"
+        return f"DuckDuckGo search failed: {exc}"
     hits = _pairs(html, "result__a", "result__snippet")
-    return _format_hits("DuckDuckGo", hits) if hits else "DuckDuckGo 没有解析到结果。"
+    return _format_hits("DuckDuckGo", hits) if hits else "DuckDuckGo returned no parsed results."
 
 
 def _bing(query: str) -> str:
@@ -430,7 +430,7 @@ def _bing(query: str) -> str:
 
 
 def _format_hits(source: str, hits: list[tuple[str, str, str]]) -> str:
-    lines = [f"来源 {source}，共 {len(hits)} 条。打开正文用 fetch_url。"]
+    lines = [f"Source {source}, {len(hits)} hits. Open a page with fetch_url."]
     for title, link, snippet in hits[:5]:
         lines.append(f"- {title}\n  {link}\n  {snippet}".rstrip())
     return "\n".join(lines)
@@ -492,11 +492,11 @@ def _fetch_blocking(url: str) -> str:
         ctype = res.headers.get("Content-Type", "")
     if url.lower().split("?", 1)[0].endswith(".pdf") or "pdf" in ctype.lower() or data.startswith(b"%PDF"):
         text = _pdf_text(data)
-        return f"PDF {url}\n{text or '没有抽出文字。链接本身可以写进摘要。'}"
+        return f"PDF {url}\n{text or 'No text extracted. The link itself can be cited.'}"
     html = data.decode("utf-8", "replace")
     text = _html_text(html)
     if not text:
-        return f"打开了 {url}，但没有可读正文。"
+        return f"Opened {url}, but there was no readable text."
     return text[:8000]
 
 

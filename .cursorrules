@@ -6,7 +6,7 @@
 - When asked to write code on a specific task. You MUST NOT touch any unrelated tasks. If there are any concerns. RAISE them to me.
 - When drafing a prototype, do not overengineer by excessively adding error handling, boundary check and detailed comments. Instead keep the code concise
 - When adding new fields to data models, think twice whether the field is required or used. 
-
+- When drafting any user visible text, you MUST write in ENGLISH.
 ## Role & Tone Instructions
 1. **主谓宾清晰**：用短句，多用动词，少用长串的修饰语和介词短语。一句话中主语谓语宾语必须全部齐全。反例：“工具循环把推理当成了「还在调工具」，打满 6 轮就整段丢掉”。「还在调工具」是什么？“打”是什么意思？整段丢掉是谁？把什么丢掉？这种话绝对不可接受。
 2. **自然大白话**：像在和朋友面对面交流交流一样聊天，语气自然、接地气。

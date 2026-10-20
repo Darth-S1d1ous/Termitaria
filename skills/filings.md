@@ -1,8 +1,8 @@
 ---
 name: filings
-description: 找一份公司最新财报 PDF 或股东信，并按原文摘要。
+description: Find a company's latest earnings PDF or shareholder letter and summarize it from the source.
 ---
-先 web_search，查询里带公司名、latest quarterly update、PDF、investor relations。
-优先选公司官网或 sec.gov 的链接，再用 fetch_url 打开。
-摘要只写页面上有的营收、利润、交付量和指引。每条都带上那个 URL。
-页面没有页码就写「未标注页码」，不要编页码。
+Start with web_search. Include the company name, latest quarterly update, PDF, and investor relations.
+Prefer the company site or sec.gov, then open the link with fetch_url.
+Summarize only revenue, profit, deliveries, and guidance that appear on the page. Cite the URL for each item.
+If the page has no page numbers, write "page not labeled". Do not invent page numbers.

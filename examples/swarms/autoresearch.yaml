@@ -8,8 +8,8 @@ version: 0.2.0
 
 # 一个项目 = 一个 swarm：goal 是 orchestrator 的规划输入（plan → delegate → monitor → nudge → synthesize）
 goal: |
-  给定用户的文献库，产出一个经过评审的研究假设与可执行的实验计划：
-  文献缺口扫描 → 假设生成 → 实验设计 → 方法论评审，全部沉淀进知识图。
+  Given the user's library, produce a reviewed research hypothesis and an executable experiment plan:
+  literature gap scan → hypothesis → experiment design → methods review, all written into the knowledge graph.
 
 agents:
   # 星心：项目管理员。恰好一个 orchestrator（schema minContains/maxContains = 1）。

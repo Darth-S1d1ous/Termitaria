@@ -40,16 +40,16 @@ _ROLE_KINDS = (
 
 # Memory 召回未接时的 demo 角色。召回结果优先于这里。
 _MAX_TOOL_ROUNDS = 6
-_WEEKDAYS = "一二三四五六日"
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 _FALLBACK_ROLES = {
     "ideator": (
-        "你是 ideator。你提出并辩护研究假设，面对质疑时补证据或收窄主张。"
-        "用中文，每次只回复两三句。"
+        "You are the ideator. You propose and defend a research hypothesis. "
+        "When challenged, add evidence or narrow the claim. Reply in English, in two or three sentences."
     ),
     "reviewer": (
-        "你是 reviewer。你挑剔地评审对方的假设：找漏洞、要证据、不轻易同意。"
-        "用中文，每次只回复两三句。"
+        "You are the reviewer. You review the hypothesis skeptically: find gaps, demand evidence, "
+        "and do not agree easily. Reply in English, in two or three sentences."
     ),
 }
 
@@ -98,7 +98,7 @@ def build_graph(model: ModelPort, emit: EmitDelta):
         role_lines = [it.text for it in task.context.recalled if it.kind in _ROLE_KINDS]
         role = "\n".join(role_lines) or _FALLBACK_ROLES.get(task.agent_id) or (
             f"You are agent '{task.agent_id}' in a Termitaria swarm. "
-            "(stub system prompt：MemoryService 未接，role/rules 为空)"
+            "(stub system prompt: MemoryService is not connected, so role and rules are empty)"
         )
         system = _system(role, rules, skills, toolbox, roster, steps)
         window = [(_sender(m), _first_text(m)) for m in task.context.window]
@@ -134,7 +134,7 @@ def build_graph(model: ModelPort, emit: EmitDelta):
                 # 模型如果还是只在正文里写 @，这里补一次真正的派活。
                 calls = mention_delegates(text, held.get("roster") or [])
             if not calls:
-                text = text or "推理被截断了，没有正文。"
+                text = text or "The reply was cut off before it had any text."
                 break
             used_tools = True
             notes: list[str] = []
@@ -174,7 +174,7 @@ def build_graph(model: ModelPort, emit: EmitDelta):
                 text = (follow or "").strip() or "\n\n".join(notes)
                 break
         else:
-            text = text or "已根据工具结果结束。"
+            text = text or "Stopped after the tool results."
         seq = state.get("seq", 0)
         for piece in _split_chunks(text, 6):
             if not piece:
@@ -309,17 +309,17 @@ def _cancelled(seq: int, usage) -> dict:
 def _system(role: str, rules: str, skills, toolbox: Toolbox, roster: list[dict], steps: list) -> str:
     parts = [role, _today()]
     if rules:
-        parts.append("规则：\n" + rules)
+        parts.append("Rules:\n" + rules)
     listed = catalog(skills)
     if listed:
         parts.append(listed)
     if roster:
-        lines = ["同事（派活用 delegate，coworker 填 id）："]
+        lines = ["Coworkers (delegate with coworker set to the id):"]
         for person in roster:
             lines.append(f"- {person['id']}（{person['display_name']}）")
         parts.append("\n".join(lines))
     if steps:
-        lines = ["项目进度，做完调用 plan："]
+        lines = ["Project progress. Call plan when a step is finished:"]
         for step in steps:
             lines.append(f"- {step.get('label') or step.get('id')} [{step.get('state')}]")
         parts.append("\n".join(lines))
@@ -339,8 +339,8 @@ def _agent_of(project: dict | None, agent_id: str) -> dict:
 def _today() -> str:
     now = datetime.now().astimezone()
     return (
-        f"今天是 {now:%Y-%m-%d}，星期{_WEEKDAYS[now.weekday()]}。"
-        "用户说的「上周」「最近」按这一天计算。"
+        f"Today is {now:%Y-%m-%d}, {_WEEKDAYS[now.weekday()]}. "
+        "Interpret last week and recent from this date."
     )
 
 

@@ -451,7 +451,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	agentMsg, err := s.waitReply(r.Context(), sessionID, userMsg.GetMessageId())
 	if err != nil {
 		s.failActive(projectID)
-		writeError(w, 504, "agent 回复超时：worker 在跑但模型太慢，稍后可刷新查看")
+		writeError(w, 504, "The agent reply timed out. The worker is running, but the model is slow. Refresh later to see the result.")
 		return
 	}
 	writeJSON(w, 200, map[string]any{

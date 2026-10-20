@@ -91,7 +91,7 @@ def build_model(cfg: ModelConfig):
         return _ADAPTERS["nvidia"].create(cfg)
     adapter = _ADAPTERS.get(provider)
     if adapter is None:
-        raise ValueError(f"未知模型提供商 {cfg.provider}")
+        raise ValueError(f"unknown model provider {cfg.provider}")
     return adapter.create(cfg)
 
 

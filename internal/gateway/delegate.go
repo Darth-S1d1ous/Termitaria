@@ -35,7 +35,7 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request) {
 	task := strings.TrimSpace(body.Task)
 	who := strings.TrimSpace(body.Coworker)
 	if fromID == "" || who == "" || task == "" {
-		writeError(w, 400, "from、coworker、task 都不能空")
+		writeError(w, 400, "from, coworker, and task are required")
 		return
 	}
 
@@ -58,11 +58,11 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request) {
 	}
 	coworker := agentByName(agents, who)
 	if coworker == nil {
-		writeError(w, 404, "没有这个同事")
+		writeError(w, 404, "no such coworker")
 		return
 	}
 	if coworker.ID == fromID {
-		writeError(w, 400, "不能把活派给自己")
+		writeError(w, 400, "cannot delegate to yourself")
 		return
 	}
 	flight := projectID + "/" + coworker.ID
@@ -72,7 +72,7 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, busy := s.inflight[flight]; busy {
 		s.mu.Unlock()
-		writeError(w, 409, coworker.ID+" 还在做上一单，不要再派")
+		writeError(w, 409, coworker.ID+" is still on the previous task")
 		return
 	}
 	s.inflight[flight] = struct{}{}
@@ -85,7 +85,7 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request) {
 
 	text := task
 	if ctx := strings.TrimSpace(body.Context); ctx != "" {
-		text += "\n\n背景：\n" + ctx
+		text += "\n\nContext:\n" + ctx
 	}
 	// 一轮交代、一轮交卷。交卷后会话挂起，负责人不会在这条支线上被再次叫醒。
 	sess, err := s.manager.OpenSession(r.Context(), projectID,
@@ -128,7 +128,7 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request) {
 		} else {
 			log.Printf("cancel %s（delegate 超时）", taskID)
 		}
-		writeError(w, 504, "同事没有在时限内交卷")
+		writeError(w, 504, "the coworker did not finish before the time limit")
 		return
 	}
 	writeJSON(w, 200, map[string]any{

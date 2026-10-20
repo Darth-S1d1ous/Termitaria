@@ -391,7 +391,7 @@ export function AppShell() {
     const sock = wsRef.current;
     if (!text || !projectId || !chat || !chat.enabled || waiting[chat.id]) return;
     if (!sock || sock.readyState !== WebSocket.OPEN) {
-      setError("连接还没就绪");
+      setError("The connection is not ready yet");
       return;
     }
     const targetChatId = chat.id;
@@ -497,7 +497,7 @@ export function AppShell() {
         <main className="blank" aria-label="No project">
           <div className="empty">
             <strong>No project</strong>
-            <p>最后一个项目已经删掉。点左边的 + 再建一个。</p>
+            <p>The last project was deleted. Press + on the left to create another.</p>
           </div>
         </main>
       )}
@@ -631,11 +631,11 @@ export function AppShell() {
           <header className="pane-header">
             <div className="pane-title">
               <h1>Memory Inspector</h1>
-              <p>图数据库还没接上。这里只显示创建项目时放进来的材料。</p>
+              <p>The graph database is not connected. This list only shows material added when the project was created.</p>
             </div>
           </header>
           <ul className="seed-list">
-            {seeds.length === 0 ? <li className="slot-hint">这个项目还没有初始材料</li> : null}
+            {seeds.length === 0 ? <li className="slot-hint">This project has no initial material</li> : null}
             {seeds.map((item) => (
               <li key={item.id}>
                 <span className="seed-kind">{item.kind}</span>
@@ -682,9 +682,9 @@ function Avatar({ chat, ids = [], small = false }: { chat: Chat; ids?: string[];
 }
 
 const PRESENCE_LABEL: Record<string, string> = {
-  online: "在线",
-  thinking: "思考中",
-  offline: "离线",
+  online: "online",
+  thinking: "thinking",
+  offline: "offline",
 };
 
 function Conversation({
@@ -801,8 +801,8 @@ function Conversation({
       </header>
       {focusSession ? (
         <p className="focus-bar">
-          只看这一条 session
-          <button type="button" onClick={onClearFocus}>显示全部</button>
+          Showing only this session
+          <button type="button" onClick={onClearFocus}>Show all</button>
         </p>
       ) : null}
       <div className="thread">
@@ -875,7 +875,7 @@ function Conversation({
             }
             onDraft(value.replaceAll("@", ""));
             if (mention) {
-              onNotice("一条消息只能 @ 一个 agent");
+              onNotice("A message can mention only one agent");
               return;
             }
             setPicking(true);

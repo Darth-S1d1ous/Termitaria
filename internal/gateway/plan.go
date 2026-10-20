@@ -44,7 +44,7 @@ func planLabels(goal string) []string {
 		}
 	}
 	if len(out) == 0 {
-		return []string{"开始"}
+		return []string{"Start"}
 	}
 	return out
 }
@@ -67,7 +67,7 @@ func planText(steps []stepJSON) string {
 	for _, step := range steps {
 		labels = append(labels, step.Label)
 	}
-	return "我按目标把项目拆成这几步：" + strings.Join(labels, " → ") + "。现在做第一步：" + steps[0].Label + "。"
+	return "I split the goal into these steps: " + strings.Join(labels, " → ") + ". The first step is " + steps[0].Label + "."
 }
 
 func orchestratorID(p *projectJSON) string {
@@ -123,7 +123,7 @@ func (s *Server) updateStep(w http.ResponseWriter, r *http.Request) {
 	switch state {
 	case "pending", "active", "done", "failed":
 	default:
-		writeError(w, 400, "state 必须是 pending、active、done 或 failed")
+		writeError(w, 400, "state must be pending, active, done, or failed")
 		return
 	}
 	s.mu.Lock()
@@ -135,7 +135,7 @@ func (s *Server) updateStep(w http.ResponseWriter, r *http.Request) {
 		idx := matchStep(p.Steps, body.Label)
 		if idx < 0 {
 			s.mu.Unlock()
-			writeError(w, 404, "没有这一步")
+			writeError(w, 404, "no such step")
 			return
 		}
 		p.Steps[idx].State = state

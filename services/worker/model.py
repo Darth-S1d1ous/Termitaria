@@ -90,9 +90,9 @@ class StubModel:
         del tools
         last = window[-1][1] if window else ""
         text = (
-            f"[stub:{model.model or 'unspecified'}] 窗口 {len(window)} 条消息"
-            + (f"，最后一条：{last[:80]!r}" if last else "")
-            + "。LangGraph 骨架已通，等 LLM client 接入。"
+            f"[stub:{model.model or 'unspecified'}] {len(window)} messages in the window"
+            + (f", last: {last[:80]!r}" if last else "")
+            + ". The LangGraph skeleton is up. The LLM client is not connected."
         )
         prompt_tokens = len(system.split()) + sum(len(t.split()) for _, t in window)
         completion_tokens = 0

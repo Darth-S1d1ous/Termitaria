@@ -180,9 +180,9 @@ def _post_sse(url: str, packed: dict) -> list[dict]:
             raw = res.read()
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:500]
-        raise RuntimeError(f"模型接口 HTTP {exc.code}：{detail}") from exc
+        raise RuntimeError(f"model API HTTP {exc.code}: {detail}") from exc
     except (URLError, TimeoutError, OSError) as exc:
-        raise RuntimeError(f"模型接口连不上：{exc}") from exc
+        raise RuntimeError(f"could not reach the model API: {exc}") from exc
     return list(_sse_payloads(raw.decode("utf-8", "replace")))
 
 

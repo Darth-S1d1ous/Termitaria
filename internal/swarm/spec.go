@@ -56,17 +56,17 @@ func Parse(raw []byte) (*Spec, error) {
 		return nil, fmt.Errorf("parse swarm spec: %w", err)
 	}
 	if f.Name == "" || strings.TrimSpace(f.Goal) == "" || len(f.Agents) == 0 {
-		return nil, fmt.Errorf("name、goal、agents 不能为空")
+		return nil, fmt.Errorf("name, goal, and agents are required")
 	}
 	seen := map[string]bool{}
 	orchestrators := 0
 	for i := range f.Agents {
 		a := &f.Agents[i]
 		if a.ID == "" {
-			return nil, fmt.Errorf("agent #%d 缺 id", i)
+			return nil, fmt.Errorf("agent #%d is missing an id", i)
 		}
 		if seen[a.ID] {
-			return nil, fmt.Errorf("agent id %s 重复", a.ID)
+			return nil, fmt.Errorf("duplicate agent id %s", a.ID)
 		}
 		seen[a.ID] = true
 		if a.DisplayName == "" {
@@ -81,7 +81,7 @@ func Parse(raw []byte) (*Spec, error) {
 		a.RolePrompt = strings.TrimSpace(a.RolePrompt)
 	}
 	if orchestrators != 1 {
-		return nil, fmt.Errorf("需要恰好一个 ORCHESTRATOR，现在是 %d 个", orchestrators)
+		return nil, fmt.Errorf("exactly one ORCHESTRATOR is required, found %d", orchestrators)
 	}
 	return &Spec{
 		Name:   f.Name,

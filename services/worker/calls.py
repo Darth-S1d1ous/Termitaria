@@ -64,15 +64,15 @@ def parse_args(raw: Any, name: str) -> dict:
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"{name} 的参数不是合法 JSON：{exc}") from exc
+            raise ValueError(f"{name} arguments are not valid JSON: {exc}") from exc
         if not isinstance(parsed, dict):
-            raise ValueError(f"{name} 的参数必须是对象")
+            raise ValueError(f"{name} arguments must be an object")
         return parsed
     if isinstance(raw, dict):
         return raw
     if raw is None:
         return {}
-    raise ValueError(f"{name} 的参数无法识别")
+    raise ValueError(f"{name} arguments could not be read")
 
 
 def _make(name: Any, args: Any, raw: Any) -> Call | None:

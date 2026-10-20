@@ -33,8 +33,8 @@ def catalog(skills: list[Skill]) -> str:
     if not skills:
         return ""
     lines = [
-        "这些技能还没展开。大多数请求用不到。确定要用时调用 load_skill，参数 name 是下面的名字。",
-        "没调用之前不要按技能正文行事。",
+        "These skills are not expanded yet. Most requests do not need them. When you do, call load_skill with name set to one of the names below.",
+        "Do not follow a skill's full text until you have loaded it.",
     ]
     for skill in skills:
         lines.append(f"- {skill.name}: {skill.description}")

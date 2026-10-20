@@ -10,7 +10,7 @@ import (
 const channelChatID = "channel"
 
 var (
-	errNoOrchestrator = errors.New("swarm 没有 orchestrator")
+	errNoOrchestrator = errors.New("this swarm has no orchestrator")
 	errUnknownAgent   = errors.New("unknown agent")
 )
 

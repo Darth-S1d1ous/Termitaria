@@ -35,7 +35,7 @@ export function SwarmView({
       {agents.length === 0 ? (
         <div className="empty">
           <strong>Swarm</strong>
-          <p>这个项目还没有 agent</p>
+          <p>This project has no agents</p>
         </div>
       ) : (
         <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Agent mesh">
@@ -61,7 +61,7 @@ export function SwarmView({
             if (!at) return null;
             const state = presence[agent.id] ?? "offline";
             const mark = markFor(agent.id, agents.map((item) => item.id));
-            const label = state === "thinking" ? "思考中" : state === "online" ? "在线" : "离线";
+            const label = state === "thinking" ? "thinking" : state === "online" ? "online" : "offline";
             return (
               <g key={agent.id} transform={`translate(${at.x} ${at.y})`}>
                 <title>{`${agent.display_name} ${label}`}</title>
