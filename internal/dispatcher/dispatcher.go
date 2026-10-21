@@ -178,6 +178,11 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 		log.Printf("agent %q 不在 registry，跳过（MVP 静态配置；Scheduler 落地后消失）", agentID)
 		return nil
 	}
+	recalled, err := d.recall(ctx, agentID, messageText(msg), traceID)
+	if err != nil {
+		log.Printf("memory.recall agent=%s: %v（保持角色条目）", agentID, err)
+		recalled = nil
+	}
 	// 触发幂等：同一触发消息只入队一次。task id 由触发消息 id 派生——进程重启 /
 	// 事件重投后派生出同一个 id，worker 的 _seen 与 actor 的 client_msg_id 去重
 	// （"task:<task_id>"）共同兜底。
@@ -191,14 +196,7 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 	context := &taskv1.TaskContext{
 		Window: snap.Window,
 		// graph_node_ids 留空：MemoryService 未接，契约已预留（contracts §4 自包含）。
-	}
-	if cfg.RolePrompt != "" {
-		context.Recalled = []*memoryv1.MemoryItem{{
-			ItemId:  "role:" + agentID,
-			AgentId: agentID,
-			Kind:    memoryv1.MemoryKind_MEMORY_KIND_ROLE,
-			Text:    cfg.RolePrompt,
-		}}
+		Recalled: mergeRecalled(agentID, cfg.RolePrompt, recalled),
 	}
 	task := &taskv1.Task{
 		TaskId:           taskID,
@@ -226,6 +224,70 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 	d.triggered[triggerID] = taskID
 	log.Printf("task %s → %s（trigger=%s trace=%s）", taskID, agentID, triggerID, traceID)
 	return nil
+}
+
+// recall 在 dispatch 前同步问 memory.recall。超时 200ms，失败则调用方保留静态角色。
+func (d *Dispatcher) recall(ctx context.Context, agentID, query, traceID string) ([]*memoryv1.MemoryItem, error) {
+	req := &memoryv1.RecallRequest{
+		AgentId:   agentID,
+		QueryText: query,
+		Depth:     memoryv1.RecallDepth_RECALL_DEPTH_AUTO,
+		TopK:      5,
+	}
+	env, err := bus.NewEnvelope(producer, traceID, req)
+	if err != nil {
+		return nil, err
+	}
+	data, err := proto.Marshal(env)
+	if err != nil {
+		return nil, err
+	}
+	call, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	msg, err := d.bus.Conn().RequestWithContext(call, bus.MemoryRecall, data)
+	if err != nil {
+		return nil, err
+	}
+	var resp memoryv1.RecallResponse
+	if _, err := bus.Unmarshal(msg.Data, &resp); err != nil {
+		return nil, err
+	}
+	return resp.GetItems(), nil
+}
+
+// mergeRecalled 把 SwarmSpec 角色接进召回结果。
+// 后端没给 ROLE 时，沿用原来的静态角色条目。已有 ROLE 且角色文案非空时，用角色文案盖住后端那条。
+func mergeRecalled(agentID, rolePrompt string, items []*memoryv1.MemoryItem) []*memoryv1.MemoryItem {
+	hasRole := false
+	for _, it := range items {
+		if it.GetKind() != memoryv1.MemoryKind_MEMORY_KIND_ROLE {
+			continue
+		}
+		hasRole = true
+		if rolePrompt != "" {
+			it.Text = rolePrompt
+		}
+	}
+	if hasRole || rolePrompt == "" {
+		return items
+	}
+	role := &memoryv1.MemoryItem{
+		ItemId:  "role:" + agentID,
+		AgentId: agentID,
+		Kind:    memoryv1.MemoryKind_MEMORY_KIND_ROLE,
+		Text:    rolePrompt,
+	}
+	return append([]*memoryv1.MemoryItem{role}, items...)
+}
+
+func messageText(msg *sessionv1.Message) string {
+	parts := make([]string, 0, len(msg.GetContent()))
+	for _, block := range msg.GetContent() {
+		if t := block.GetText(); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // nextSpeaker 决定谁接话；返回 nil = 无需触发。

@@ -15,6 +15,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+memory = [
+    "mem0ai",
+    "qdrant-client",
+    "graphiti-core[falkordb]",
+    "sentence-transformers",
+]
 
 # 纯依赖清单 + pytest 配置：代码以源码方式从仓库根运行（python -m services.worker.main），
 # gen/python 由 services/worker/__init__.py 加进 sys.path；正式打包是 slice-2 的事。

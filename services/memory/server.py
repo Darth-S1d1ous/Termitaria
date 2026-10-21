@@ -28,9 +28,10 @@ _RECALL_QUEUE = "memory-service"  # queue group：将来多副本负载均衡
 
 class RecallResponder:
     """memory.recall 的 request-reply 应答；Go dispatcher 预取（P2）的对端。"""
-    def __init__(self, nc, cfg: MemoryConfig) -> None:
+    def __init__(self, nc, cfg: MemoryConfig, backend) -> None:
         self._nc = nc
         self._cfg = cfg
+        self._backend = backend
 
     async def run(self) -> None:
         await self._nc.subscribe(_RECALL_SUBJECT, queue=_RECALL_QUEUE, cb=self._on_request)
@@ -46,7 +47,12 @@ class RecallResponder:
             await msg.respond(envelope.pack(self._cfg.producer, "", memory_pb2.RecallResponse()))
             return
 
-        resp = build_recall_response(req)
+        try:
+            resp = await self._backend.recall(req)
+        except Exception:
+            log.exception("recall backend failed, reply canned degraded")
+            resp = build_recall_response(req)
+            resp.meta.degraded = True
         await msg.respond(envelope.pack(self._cfg.producer, env.trace_id, resp))
         log.info(
             "recall agent=%s depth=%s → %d items (trace=%s)",
@@ -71,6 +77,7 @@ class WriteConsumer:
         durable: str,
         payload_type: type[PbMessage],
         spool_file: str,
+        backend,
     ) -> None:
         self._js = nc.jetstream()
         self._cfg = cfg
@@ -78,6 +85,7 @@ class WriteConsumer:
         self._durable = durable
         self._type = payload_type
         self._path = os.path.join(cfg.spool_dir, spool_file)
+        self._backend = backend
         self._seen: set[str] = set()  # event_id 内存级去重；MVP 不持久化
 
     async def run(self) -> None:
@@ -117,5 +125,18 @@ class WriteConsumer:
         with open(self._path, "a", encoding="utf-8") as f:
             f.write(__import__("json").dumps(line, ensure_ascii=False) + "\n")
         self._seen.add(env.event_id)
+        await self._store(payload)
         await msg.ack()
         log.info("spooled %s event=%s → %s", self._type.DESCRIPTOR.full_name, env.event_id, self._path)
+
+    async def _store(self, payload: PbMessage) -> None:
+        try:
+            if isinstance(payload, memory_pb2.WriteEpisodeRequest):
+                item_id = await self._backend.write_episode(payload)
+            else:
+                item_id = await self._backend.write_document(payload)
+        except Exception:
+            log.exception("backend write failed for %s", self._subject)
+            return
+        if item_id:
+            log.info("stored %s id=%s", self._subject, item_id)

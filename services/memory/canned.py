@@ -12,10 +12,10 @@ from termitaria.memory.v1 import memory_pb2
 # 罐装条目模板：(kind, radius, 文本)。radius 从球心到球缘递增（架构 §5.1）。
 # parent 链：ROLE ← RULE ← PRINCIPLE ← EPISODE，客户端可重组记忆树（Memory Inspector）。
 _CANNED = (
-    (memory_pb2.MEMORY_KIND_ROLE, 0.05, "你是 Termitaria swarm 中的一名研究员。"),
-    (memory_pb2.MEMORY_KIND_RULE, 0.30, "引用必须给出出处；不确定时明确说不确定。"),
-    (memory_pb2.MEMORY_KIND_PRINCIPLE, 0.55, "先验证假设，再扩大投入。"),
-    (memory_pb2.MEMORY_KIND_EPISODE, 0.90, "上次 session 中关于双曲嵌入层级的讨论纪要。"),
+    (memory_pb2.MEMORY_KIND_ROLE, 0.05, "You are a researcher in Termitaria swarm。"),
+    (memory_pb2.MEMORY_KIND_RULE, 0.30, "You must provide evidence for your reference. If you are unsure, state clearly you are unsure."),
+    (memory_pb2.MEMORY_KIND_PRINCIPLE, 0.55, "First validate the hypothesis, then expand the investment."),
+    (memory_pb2.MEMORY_KIND_EPISODE, 0.90, "The summary of the discussion about the hyperbolic embedding level in the last session."),
 )
 
 _PRINCIPLE_SIDE = frozenset(
