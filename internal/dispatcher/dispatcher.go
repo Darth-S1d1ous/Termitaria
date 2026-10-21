@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +23,11 @@ import (
 )
 
 const producer = "dispatcher"
+
+// defaultRecallWait 在还没有 data/recall-wait-ms 时使用。
+// 20:45 那次真实检索大约 700ms 才返回，所以下限是 1200ms。
+// 记忆服务启动后会重写那个文件，但不会低于这个下限。
+const defaultRecallWait = 1200 * time.Millisecond
 
 type AgentConfig struct {
 	Model  *commonv1.ModelRef
@@ -66,10 +73,11 @@ func (r *Registry) Register(agentID string, cfg AgentConfig) {
 
 // Dispatcher 订阅 session 事件流与 task result，做触发与回写。
 type Dispatcher struct {
-	bus         *bus.Bus
-	sessions    *session.Manager
-	registry    AgentRegistry
-	windowLimit int
+	bus           *bus.Bus
+	sessions      *session.Manager
+	registry      AgentRegistry
+	windowLimit   int
+	recallTimeout time.Duration
 
 	mu        sync.Mutex
 	triggered map[string]string
@@ -83,12 +91,30 @@ func (d *Dispatcher) SetHub(h *live.Hub) { d.hub = h }
 
 func New(b *bus.Bus, sessions *session.Manager, registry AgentRegistry, windowLimit int) *Dispatcher {
 	return &Dispatcher{
-		bus:         b,
-		sessions:    sessions,
-		registry:    registry,
-		windowLimit: windowLimit,
-		triggered:   make(map[string]string),
+		bus:           b,
+		sessions:      sessions,
+		registry:      registry,
+		windowLimit:   windowLimit,
+		recallTimeout: recallWait(),
+		triggered:     make(map[string]string),
 	}
+}
+
+// recallWait 是 memory.recall 的等待。
+// RECALL_TIMEOUT_MS 优先。否则读记忆服务写下的 data/recall-wait-ms。
+// 那个文件不低于 1200ms。热查询更慢时，文件里是较慢的一次再留余量。
+func recallWait() time.Duration {
+	if ms := envOrUint64("RECALL_TIMEOUT_MS", 0); ms > 0 {
+		return time.Duration(ms) * time.Millisecond
+	}
+	raw, err := os.ReadFile("data/recall-wait-ms")
+	if err == nil {
+		n, parseErr := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
+		if parseErr == nil && n > 0 {
+			return time.Duration(n) * time.Millisecond
+		}
+	}
+	return defaultRecallWait
 }
 
 // Start 建立两路订阅后返回（非阻塞）：
@@ -226,7 +252,7 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 	return nil
 }
 
-// recall 在 dispatch 前同步问 memory.recall。超时 200ms，失败则调用方保留静态角色。
+// recall 在 dispatch 前同步问 memory.recall。超时见 recallWait。失败则调用方保留静态角色。
 func (d *Dispatcher) recall(ctx context.Context, agentID, query, traceID string) ([]*memoryv1.MemoryItem, error) {
 	req := &memoryv1.RecallRequest{
 		AgentId:   agentID,
@@ -242,7 +268,7 @@ func (d *Dispatcher) recall(ctx context.Context, agentID, query, traceID string)
 	if err != nil {
 		return nil, err
 	}
-	call, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	call, cancel := context.WithTimeout(ctx, d.recallTimeout)
 	defer cancel()
 	msg, err := d.bus.Conn().RequestWithContext(call, bus.MemoryRecall, data)
 	if err != nil {

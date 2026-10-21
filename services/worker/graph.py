@@ -37,6 +37,7 @@ _ROLE_KINDS = (
     memory_pb2.MEMORY_KIND_RULE,
     memory_pb2.MEMORY_KIND_PRINCIPLE,
 )
+_MAX_EPISODES = 5
 
 # Memory 召回未接时的 demo 角色。召回结果优先于这里。
 _MAX_TOOL_ROUNDS = 6
@@ -100,6 +101,9 @@ def build_graph(model: ModelPort, emit: EmitDelta):
             f"You are agent '{task.agent_id}' in a Termitaria swarm. "
             "(stub system prompt: MemoryService is not connected, so role and rules are empty)"
         )
+        facts = remembered_facts(task.context.recalled)
+        if facts:
+            role = f"{role}\n\n{facts}"
         system = _system(role, rules, skills, toolbox, roster, steps)
         window = [(_sender(m), _first_text(m)) for m in task.context.window]
         return {"system": system, "window": window}
@@ -304,6 +308,22 @@ def _cancelled(seq: int, usage) -> dict:
     if usage is not None:
         out["usage"] = usage
     return out
+
+
+def remembered_facts(items, limit: int = _MAX_EPISODES) -> str:
+    lines = []
+    for item in items:
+        if item.kind != memory_pb2.MEMORY_KIND_EPISODE:
+            continue
+        text = item.text.strip()
+        if not text:
+            continue
+        lines.append(text)
+        if len(lines) >= limit:
+            break
+    if not lines:
+        return ""
+    return "Remembered facts:\n" + "\n".join(f"- {line}" for line in lines)
 
 
 def _system(role: str, rules: str, skills, toolbox: Toolbox, roster: list[dict], steps: list) -> str:

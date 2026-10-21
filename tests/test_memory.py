@@ -12,6 +12,7 @@ from services.common import envelope
 from services.memory.backend import CannedBackend, build_backend
 from services.memory.config import MemoryConfig
 from services.memory.distiller import Distiller
+from services.memory.mem0_backend import add_messages
 from services.memory.items import assemble_response, graphiti_items, mem0_items, principle_id, rule_id
 from services.memory.server import RecallResponder
 
@@ -175,7 +176,19 @@ def _event(ev: session_pb2.SessionEvent) -> _Msg:
     return _Msg(envelope.pack("test", "trace-1", ev))
 
 
-def test_distiller_publishes_one_episode_per_participant():
+def _user_line(text: str) -> session_pb2.Message:
+    message = session_pb2.Message(content=[session_pb2.ContentBlock(text=text)])
+    getattr(message, "from").user_id = "u1"
+    return message
+
+
+def _agent_line(text: str) -> session_pb2.Message:
+    message = session_pb2.Message(content=[session_pb2.ContentBlock(text=text)])
+    getattr(message, "from").agent_id = "ideator"
+    return message
+
+
+def test_distiller_writes_each_user_line_and_skips_close():
     async def run() -> None:
         js = _JS()
         distiller = Distiller(_NC(js), MemoryConfig(nats_url="nats://localhost:4222"))
@@ -191,30 +204,22 @@ def test_distiller_publishes_one_episode_per_participant():
                 )
             ),
         )
-        first = session_pb2.SessionEvent(
+        user_line = session_pb2.SessionEvent(
             session_id="s1",
             swarm_id="sw1",
-            message_appended=session_pb2.MessageAppended(
-                message=session_pb2.Message(
-                    content=[session_pb2.ContentBlock(text="alpha")]
-                )
-            ),
+            message_appended=session_pb2.MessageAppended(message=_user_line("alpha")),
         )
-        second = session_pb2.SessionEvent(
+        agent_line = session_pb2.SessionEvent(
             session_id="s1",
             swarm_id="sw1",
-            message_appended=session_pb2.MessageAppended(
-                message=session_pb2.Message(
-                    content=[session_pb2.ContentBlock(text="beta")]
-                )
-            ),
+            message_appended=session_pb2.MessageAppended(message=_agent_line("beta")),
         )
         closed = session_pb2.SessionEvent(
             session_id="s1",
             swarm_id="sw1",
             closed=session_pb2.SessionClosed(reason="done"),
         )
-        for ev in (opened, first, second, closed):
+        for ev in (opened, user_line, agent_line, closed):
             await distiller._handle(_event(ev))
 
         assert distiller.fanned_out == [("s1", "ideator"), ("s1", "reviewer")]
@@ -228,8 +233,59 @@ def test_distiller_publishes_one_episode_per_participant():
             episodes.append(req.episode)
         assert {ep.agent_id for ep in episodes} == {"ideator", "reviewer"}
         assert episodes[0].session_id == "s1"
-        assert episodes[0].summary == "alpha\nbeta"
-        assert list(episodes[0].salient_spans) == ["alpha", "beta"]
+        assert episodes[0].summary == "alpha"
+        assert list(episodes[0].salient_spans) == ["alpha"]
+
+    asyncio.run(run())
+
+
+def test_mem0_add_keeps_the_user_sentence():
+    messages, kwargs = add_messages(
+        "实验室编号是 17-BLUE。",
+        agent_id="pi",
+        run_id="s1",
+        metadata={"occurred_at_ms": 1, "run_id": "s1"},
+    )
+    assert messages == [{"role": "user", "content": "实验室编号是 17-BLUE。"}]
+    assert kwargs["infer"] is False
+    assert kwargs["agent_id"] == "pi"
+    assert kwargs["run_id"] == "s1"
+
+    _, document = add_messages("notes", agent_id="documents", metadata={"doc_id": "d1"})
+    assert document["infer"] is False
+    assert "run_id" not in document
+
+
+def test_warm_queries_embed_once_then_time_three_recalls(tmp_path):
+    from services.memory.timing import publish_recall_wait, recommend_recall_wait_ms, time_warm_queries
+
+    async def run() -> None:
+        calls = []
+
+        async def embed(text: str) -> None:
+            calls.append(("embed", text))
+
+        async def recall() -> int:
+            calls.append("recall")
+            return 400
+
+        samples = await time_warm_queries(embed, recall)
+        assert calls == [("embed", "warmup"), "recall", "recall", "recall"]
+        assert samples == [400, 400, 400]
+        assert recommend_recall_wait_ms(samples) == 1200
+        assert recommend_recall_wait_ms([]) == 0
+        assert recommend_recall_wait_ms([2000, 1000]) == 3000
+
+        class Backend:
+            name = "mem0"
+
+            async def warmup(self) -> list[int]:
+                return [200, 400]
+
+        path = tmp_path / "recall-wait-ms"
+        wait = await publish_recall_wait(Backend(), path)
+        assert wait == 1200
+        assert path.read_text() == "1200\n"
 
     asyncio.run(run())
 

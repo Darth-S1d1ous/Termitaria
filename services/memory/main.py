@@ -13,6 +13,7 @@ from .backend import build_backend
 from .config import MemoryConfig
 from .distiller import Distiller
 from .server import RecallResponder, WriteConsumer
+from .timing import publish_recall_wait
 
 async def amain() -> None:
     logging.basicConfig(
@@ -20,6 +21,10 @@ async def amain() -> None:
     )
     cfg = MemoryConfig.from_env()
     backend = await build_backend(cfg)
+    try:
+        await publish_recall_wait(backend)
+    except Exception:
+        logging.getLogger(__name__).exception("recall warmup failed")
     nc = await nats.connect(cfg.nats_url, name="termitaria-memory")
 
     responder = RecallResponder(nc, cfg, backend)

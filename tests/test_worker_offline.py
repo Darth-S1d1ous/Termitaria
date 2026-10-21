@@ -5,9 +5,11 @@
 import asyncio
 
 from services.worker import envelope
-from services.worker.model import StubModel
+from services.worker.graph import remembered_facts
+from services.worker.model import Chunk, Done, StubModel
 from services.worker.runner import TaskRunner
 from termitaria.common.v1 import common_pb2
+from termitaria.memory.v1 import memory_pb2
 from termitaria.session.v1 import session_pb2
 from termitaria.task.v1 import task_pb2
 
@@ -123,3 +125,41 @@ def test_model_error_fails_task():
     assert result.status == task_pb2.TASK_STATUS_FAILED
     assert result.error.code == "WORKER_ERROR"
     assert result.error.retryable is False
+
+
+def test_prompt_keeps_five_remembered_facts():
+    facts = [f"FACT-{i}-UNIQUE" for i in range(6)]
+    items = [
+        memory_pb2.MemoryItem(kind=memory_pb2.MEMORY_KIND_ROLE, text="ROLE-STAYS"),
+        *[
+            memory_pb2.MemoryItem(kind=memory_pb2.MEMORY_KIND_EPISODE, text=text)
+            for text in facts
+        ],
+        memory_pb2.MemoryItem(kind=memory_pb2.MEMORY_KIND_EPISODE, text="   "),
+    ]
+    block = remembered_facts(items)
+    assert block == "Remembered facts:\n" + "\n".join(f"- {text}" for text in facts[:5])
+    assert remembered_facts([]) == ""
+
+    task = make_task()
+    task.context.recalled.extend(items)
+
+    class Capture:
+        def __init__(self) -> None:
+            self.system = ""
+
+        async def stream(self, *, system, window, model, max_tokens, tools=None):
+            del window, model, max_tokens, tools
+            self.system = system
+            yield Chunk("ok")
+            yield Done(task_pb2.TaskUsage(model="stub"))
+
+    model = Capture()
+    runner = TaskRunner(FakeNC(), model, producer="test")
+    result = asyncio.run(runner.run(task, "trace-1"))
+
+    assert result.status == task_pb2.TASK_STATUS_COMPLETED
+    assert "ROLE-STAYS" in model.system
+    assert "Remembered facts:" in model.system
+    assert "FACT-4-UNIQUE" in model.system
+    assert "FACT-5-UNIQUE" not in model.system

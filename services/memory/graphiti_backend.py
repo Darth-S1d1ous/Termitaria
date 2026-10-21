@@ -15,6 +15,7 @@ from termitaria.memory.v1 import memory_pb2
 
 from .config import MemoryConfig
 from .items import assemble_response, graphiti_items
+from .timing import time_warm_queries
 
 log = logging.getLogger(__name__)
 
@@ -37,10 +38,11 @@ class GraphitiBackend:
             base_url=cfg.llm_base_url,
         )
         driver = FalkorDriver(host=cfg.falkordb_host, port=cfg.falkordb_port)
+        self._embedder = _local_embedder(cfg.embed_model)
         self._graphiti = Graphiti(
             graph_driver=driver,
             llm_client=_llm_client(llm_config),
-            embedder=_local_embedder(cfg.embed_model),
+            embedder=self._embedder,
             cross_encoder=_cross_encoder(llm_config),
         )
         self._cfg = cfg
@@ -53,6 +55,18 @@ class GraphitiBackend:
                 return
             await self._graphiti.build_indices_and_constraints()
             self._ready = True
+
+    async def warmup(self) -> list[int]:
+        async def embed(text: str) -> None:
+            await self._embedder.create(text)
+
+        async def once() -> int:
+            resp = await self.recall(
+                memory_pb2.RecallRequest(agent_id="_warmup", query_text="hello", top_k=1)
+            )
+            return resp.meta.latency_ms
+
+        return await time_warm_queries(embed, once)
 
     async def recall(self, req: memory_pb2.RecallRequest) -> memory_pb2.RecallResponse:
         started = time.time()
