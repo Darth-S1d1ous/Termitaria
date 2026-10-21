@@ -865,6 +865,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 .kg-edge { stroke: #c5d0d8; stroke-width: 2; }
 .kg-edge.hot { stroke: var(--accent); stroke-width: 3; }
+.kg-edge.expired { stroke-dasharray: 5 4; opacity: 0.45; }
+
+.kg-agent {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 14px;
+}
+.kg-agent select { font: inherit; }
 
 .kg-node { cursor: pointer; }
 .kg-body svg.picked .kg-node { opacity: 0.35; }

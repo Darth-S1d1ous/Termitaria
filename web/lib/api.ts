@@ -56,6 +56,34 @@ export function loadMessages(projectId: string, chatId: string) {
   return api<{ messages: ChatMessage[] }>(`/api/projects/${projectId}/chats/${chatId}/messages`);
 }
 
+export type MemoryNode = {
+  id: string;
+  name: string;
+  summary: string;
+};
+
+export type MemoryEdge = {
+  id: string;
+  source: string;
+  target: string;
+  fact: string;
+  name: string;
+  valid_at: string;
+  invalid_at: string;
+  expired: boolean;
+};
+
+export type MemoryGraph = {
+  backend: string;
+  agent_id: string;
+  nodes: MemoryNode[];
+  edges: MemoryEdge[];
+};
+
+export function loadMemoryGraph(agentId: string) {
+  return api<MemoryGraph>(`/api/memory-graph?agent=${encodeURIComponent(agentId)}`);
+}
+
 export function sendMessage(projectId: string, chatId: string, text: string) {
   return api<{ user: ChatMessage; agent: ChatMessage }>(
     `/api/projects/${projectId}/chats/${chatId}/messages`,

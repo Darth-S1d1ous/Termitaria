@@ -13,6 +13,7 @@ from services.memory.backend import CannedBackend, build_backend
 from services.memory.config import MemoryConfig
 from services.memory.distiller import Distiller
 from services.memory.mem0_backend import add_messages
+from services.memory.graph_view import build_graph_view, empty_graph_view
 from services.memory.items import assemble_response, graphiti_items, mem0_items, principle_id, rule_id
 from services.memory.server import RecallResponder
 
@@ -237,6 +238,109 @@ def test_distiller_writes_each_user_line_and_skips_close():
         assert list(episodes[0].salient_spans) == ["alpha"]
 
     asyncio.run(run())
+
+
+def test_distiller_restores_open_sessions_without_rewriting_old_lines():
+    async def run() -> None:
+        js = _JS()
+        distiller = Distiller(_NC(js), MemoryConfig(nats_url="nats://localhost:4222"))
+        opened = session_pb2.SessionEvent(
+            session_id="s1",
+            swarm_id="sw1",
+            opened=session_pb2.SessionOpened(
+                session=session_pb2.Session(
+                    participants=[session_pb2.Participant(agent_id="pi")]
+                )
+            ),
+        )
+        old_line = session_pb2.SessionEvent(
+            session_id="s1",
+            swarm_id="sw1",
+            message_appended=session_pb2.MessageAppended(message=_user_line("butter")),
+        )
+        closed = session_pb2.SessionEvent(
+            session_id="s2",
+            swarm_id="sw1",
+            closed=session_pb2.SessionClosed(reason="done"),
+        )
+        distiller._apply_roster(opened)
+        distiller._remember_roster(_event(old_line))
+        distiller._apply_roster(
+            session_pb2.SessionEvent(
+                session_id="s2",
+                swarm_id="sw1",
+                opened=session_pb2.SessionOpened(
+                    session=session_pb2.Session(
+                        participants=[session_pb2.Participant(agent_id="reviewer")]
+                    )
+                ),
+            )
+        )
+        distiller._apply_roster(closed)
+        assert js.published == []
+        assert distiller._participants == {"s1": ["pi"]}
+
+        fresh = session_pb2.SessionEvent(
+            session_id="s1",
+            swarm_id="sw1",
+            message_appended=session_pb2.MessageAppended(message=_user_line("hot chocolate")),
+        )
+        await distiller._handle(_event(fresh))
+        assert distiller.fanned_out == [("s1", "pi")]
+        _, req = envelope.unpack(js.published[0][1], memory_pb2.WriteEpisodeRequest)
+        assert req.episode.summary == "hot chocolate"
+
+    asyncio.run(run())
+
+
+def test_graph_view_keeps_one_fact_and_one_expired_fact():
+    view = build_graph_view(
+        "graphiti",
+        "pi",
+        [
+            {"id": "a", "name": "User", "summary": "The person in the chat."},
+            {"id": "b", "name": "MILK", "summary": "A drink."},
+            {"id": "a", "name": "duplicate", "summary": "ignored"},
+        ],
+        [
+            {
+                "id": "e1",
+                "source": "a",
+                "target": "b",
+                "fact": "favourite drink is MILK",
+                "name": "LIKES",
+                "valid_at": "2026-10-21",
+                "invalid_at": "",
+            },
+            {
+                "id": "e2",
+                "source": "a",
+                "target": "b",
+                "fact": "favourite drink is hot chocolate",
+                "name": "LIKES",
+                "valid_at": "2026-10-21",
+                "invalid_at": "2026-10-22",
+            },
+            {"id": "e3", "source": "missing", "target": "b", "fact": "dropped"},
+        ],
+    )
+    assert view["backend"] == "graphiti"
+    assert view["agent_id"] == "pi"
+    assert [node["id"] for node in view["nodes"]] == ["a", "b"]
+    assert view["edges"][0]["expired"] is False
+    assert view["edges"][1]["expired"] is True
+    assert view["edges"][1]["fact"] == "favourite drink is hot chocolate"
+    assert len(view["edges"]) == 2
+    capped = build_graph_view(
+        "graphiti",
+        "pi",
+        [{"id": f"n{i}", "name": f"n{i}", "summary": ""} for i in range(81)],
+        [],
+    )
+    assert len(capped["nodes"]) == 80
+
+    empty = empty_graph_view("mem0", "pi")
+    assert empty == {"backend": "mem0", "agent_id": "pi", "nodes": [], "edges": []}
 
 
 def test_mem0_add_keeps_the_user_sentence():

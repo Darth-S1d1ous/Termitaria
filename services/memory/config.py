@@ -34,6 +34,7 @@ class MemoryConfig:
     qdrant_collection: str = "termitaria_mem0"
     falkordb_host: str = "localhost"
     falkordb_port: int = 6379
+    http_addr: str = "127.0.0.1:8791"
 
     @classmethod
     def from_env(cls) -> Self:
@@ -63,4 +64,6 @@ class MemoryConfig:
             qdrant_collection=os.environ.get("QDRANT_COLLECTION", "termitaria_mem0"),
             falkordb_host=os.environ.get("FALKORDB_HOST", "localhost"),
             falkordb_port=int(os.environ.get("FALKORDB_PORT", "6379")),
+            http_addr=os.environ.get("MEMORY_HTTP_ADDR", "127.0.0.1:8791").strip()
+            or "127.0.0.1:8791",
         )

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 
+from nats.js.api import AckPolicy, ConsumerConfig, DeliverPolicy
 from termitaria.memory.v1 import memory_pb2
 from termitaria.session.v1 import session_pb2
 
@@ -26,16 +27,15 @@ class Distiller:
     def __init__(self, nc, cfg: MemoryConfig) -> None:
         self._js = nc.jetstream()
         self._cfg = cfg
-        # session_id → agent participants。内存表 best-effort：
-        # TODO(colleague)：进程重启后丢失，正式实现应对该 session 做事件重放
-        # （参考 internal/session/manager.go 的 replay）取回 Opened 事件。
+        # session_id → agent participants。启动时重放 Opened / Closed 重建。
         self._participants: dict[str, list[str]] = {}
         # 已发出的 (session_id, agent_id)，测试断言口。
         self.fanned_out: list[tuple[str, str]] = []
 
     async def run(self) -> None:
+        await self._recover_participants()
         sub = await self._js.pull_subscribe("sessions.>", durable=_DURABLE, stream=_STREAM)
-        log.info("distiller up: durable=%s filter=sessions.>", _DURABLE)
+        log.info("distiller up: durable=%s filter=sessions.> open_sessions=%d", _DURABLE, len(self._participants))
         while True:
             try:
                 msgs = await sub.fetch(self._cfg.fetch_batch, timeout=self._cfg.fetch_timeout_s)
@@ -53,18 +53,56 @@ class Distiller:
             log.exception("unparseable session event, ack to drop")
             await msg.ack()
             return
-        kind = ev.WhichOneof("event")
-        if kind == "opened":
-            agents = [p.agent_id for p in ev.opened.session.participants if p.HasField("agent_id")]
-            self._participants[ev.session_id] = agents
-        elif kind == "message_appended":
+        self._apply_roster(ev)
+        if ev.WhichOneof("event") == "message_appended":
             message = ev.message_appended.message
             text = _message_text(message)
             if text and _is_user(message):
                 await self._write_line(ev, env.trace_id, text)
+        await msg.ack()
+
+    async def _recover_participants(self) -> None:
+        # 临时消费者从头读，不碰 memory-distiller 的游标，也不把旧用户消息再写一遍。
+        sub = await self._js.pull_subscribe(
+            "sessions.>",
+            stream=_STREAM,
+            config=ConsumerConfig(
+                deliver_policy=DeliverPolicy.ALL,
+                ack_policy=AckPolicy.NONE,
+                filter_subject="sessions.>",
+            ),
+        )
+        try:
+            while True:
+                try:
+                    msgs = await sub.fetch(self._cfg.fetch_batch, timeout=self._cfg.fetch_timeout_s)
+                except Exception as exc:
+                    if type(exc).__name__ != "TimeoutError":
+                        log.exception("replay sessions")
+                    break
+                if not msgs:
+                    break
+                for msg in msgs:
+                    self._remember_roster(msg)
+        finally:
+            await sub.unsubscribe()
+        log.info("distiller recovered %d open sessions", len(self._participants))
+
+    def _remember_roster(self, msg) -> None:
+        try:
+            _, ev = envelope.unpack(msg.data, session_pb2.SessionEvent)
+        except Exception:
+            log.exception("unparseable session event during replay")
+            return
+        self._apply_roster(ev)
+
+    def _apply_roster(self, ev: session_pb2.SessionEvent) -> None:
+        kind = ev.WhichOneof("event")
+        if kind == "opened":
+            agents = [p.agent_id for p in ev.opened.session.participants if p.HasField("agent_id")]
+            self._participants[ev.session_id] = agents
         elif kind == "closed":
             self._participants.pop(ev.session_id, None)
-        await msg.ack()
 
     async def _write_line(self, ev: session_pb2.SessionEvent, trace_id: str, text: str) -> None:
         agents = self._participants.get(ev.session_id, [])

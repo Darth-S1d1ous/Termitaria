@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from termitaria.memory.v1 import memory_pb2
 
 from .config import MemoryConfig
+from .graph_view import agent_ok, build_graph_view, empty_graph_view
 from .items import assemble_response, graphiti_items
 from .timing import time_warm_queries
 
@@ -68,6 +69,26 @@ class GraphitiBackend:
 
         return await time_warm_queries(embed, once)
 
+    async def graph_view(self, agent_id: str) -> dict:
+        if not agent_ok(agent_id):
+            return empty_graph_view(self.name, agent_id)
+        driver = self._graphiti.driver.clone(database=agent_id)
+        try:
+            async with self._lock:
+                node_raw = await driver.execute_query(
+                    "MATCH (n:Entity) RETURN n.uuid AS id, n.name AS name, n.summary AS summary LIMIT 80"
+                )
+                edge_raw = await driver.execute_query(
+                    "MATCH (a:Entity)-[r]->(b:Entity) "
+                    "RETURN r.uuid AS id, a.uuid AS source, b.uuid AS target, "
+                    "r.fact AS fact, r.name AS name, r.valid_at AS valid_at, r.invalid_at AS invalid_at "
+                    "LIMIT 400"
+                )
+        except Exception:
+            log.exception("graphiti graph view failed agent=%s", agent_id)
+            return empty_graph_view(self.name, agent_id)
+        return build_graph_view(self.name, agent_id, _records(node_raw), _records(edge_raw))
+
     async def recall(self, req: memory_pb2.RecallRequest) -> memory_pb2.RecallResponse:
         started = time.time()
         limit = req.top_k or 5
@@ -117,6 +138,15 @@ class GraphitiBackend:
             source=source,
             group_id=group_id,
         )
+
+
+def _records(raw) -> list[dict]:
+    if not raw:
+        return []
+    rows = raw[0] if isinstance(raw, tuple) else raw
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
 
 
 def _when(occurred_at_ms: int) -> datetime:

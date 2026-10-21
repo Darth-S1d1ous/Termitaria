@@ -7,11 +7,14 @@
 from __future__ import annotations
 import asyncio
 import logging
+import threading
+
 import nats
 from termitaria.memory.v1 import memory_pb2
 from .backend import build_backend
 from .config import MemoryConfig
 from .distiller import Distiller
+from .graph_http import serve_graph
 from .server import RecallResponder, WriteConsumer
 from .timing import publish_recall_wait
 
@@ -45,6 +48,12 @@ async def amain() -> None:
         backend=backend,
     )
     distiller = Distiller(nc, cfg)
+    threading.Thread(
+        target=serve_graph,
+        args=(backend, cfg.http_addr, asyncio.get_running_loop()),
+        name="memory-graph-http",
+        daemon=True,
+    ).start()
 
     try:
         await asyncio.gather(

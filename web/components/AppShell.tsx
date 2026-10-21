@@ -608,7 +608,7 @@ export function AppShell() {
       )}
 
       {view === "chats" && project && projectPane === "knowledge" && (
-        <KnowledgeGraph key={projectId ?? "none"} seeds={seeds} onChats={() => setProjectPane("chats")} />
+        <KnowledgeGraph key={projectId ?? "none"} agents={project.agents} onChats={() => setProjectPane("chats")} />
       )}
 
       {view === "graph" && (

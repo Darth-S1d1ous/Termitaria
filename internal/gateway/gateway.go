@@ -13,8 +13,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -186,6 +188,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/topology", s.topology)
 	mux.HandleFunc("POST /api/projects/{id}/delegate", s.delegate)
 	mux.HandleFunc("POST /api/projects/{id}/steps", s.updateStep)
+	mux.HandleFunc("GET /api/memory-graph", s.memoryGraph)
 	mux.HandleFunc("GET /api/ws", s.serveWS)
 	return cors(mux)
 }
@@ -193,6 +196,45 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) ListenAndServe(addr string) error {
 	log.Printf("gateway http://%s", addr)
 	return http.ListenAndServe(addr, s.Handler())
+}
+
+func (s *Server) memoryGraph(w http.ResponseWriter, r *http.Request) {
+	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
+	if agent == "" {
+		writeError(w, 400, "agent is required")
+		return
+	}
+	addr := os.Getenv("MEMORY_HTTP_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:8791"
+	}
+	endpoint := "http://" + addr + "/graph?agent=" + url.QueryEscape(agent)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		writeError(w, 502, err.Error())
+		return
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		writeJSON(w, 200, map[string]any{
+			"backend":  "",
+			"agent_id": agent,
+			"nodes":    []any{},
+			"edges":    []any{},
+		})
+		return
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		writeError(w, 502, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(res.StatusCode)
+	_, _ = w.Write(body)
 }
 
 func cors(next http.Handler) http.Handler {
