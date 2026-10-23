@@ -20,6 +20,7 @@ from services.common import envelope
 
 from .config import GraphConfig
 from .project_graph import ingest_document
+from .relate import link_documents
 from .store import GraphStore
 
 log = logging.getLogger(__name__)
@@ -76,7 +77,9 @@ class Ingestor:
 
     async def _ingest(self, doc: memory_pb2.Document, trace_id: str) -> str:
         log.info("ingest doc=%s trace=%s", doc.doc_id, trace_id)
-        return await ingest_document(self._store, doc)
+        node_id = await ingest_document(self._store, doc)
+        await link_documents(self._store, node_id)
+        return node_id
 
     def _spool(self, env, req: memory_pb2.WriteDocumentRequest) -> None:
         line = {

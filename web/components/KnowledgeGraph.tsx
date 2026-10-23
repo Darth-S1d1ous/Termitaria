@@ -188,6 +188,7 @@ export function KnowledgeGraph({
             const b = pos.get(edge.target);
             if (!a || !b) return null;
             const hot = selected && (edge.source === selected.id || edge.target === selected.id);
+            const kind = edge.kind === "SUPPORTS" || edge.kind === "CONTRADICTS" ? ` ${edge.kind.toLowerCase()}` : "";
             return (
               <line
                 key={edge.id}
@@ -195,7 +196,7 @@ export function KnowledgeGraph({
                 y1={a.y}
                 x2={b.x}
                 y2={b.y}
-                className={`kg-edge${hot ? " hot" : ""}`}
+                className={`kg-edge${kind}${hot ? " hot" : ""}`}
               />
             );
           })}

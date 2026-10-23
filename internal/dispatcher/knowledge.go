@@ -117,7 +117,49 @@ func formatKnowledge(resp *graphv1.QuerySubgraphResponse) ([]string, string) {
 	if len(ids) == 0 {
 		return nil, ""
 	}
+	writeRelations(&b, resp)
 	return ids, b.String()
+}
+
+func writeRelations(b *strings.Builder, resp *graphv1.QuerySubgraphResponse) {
+	titles := map[string]string{}
+	for _, node := range resp.GetNodes() {
+		titles[node.GetNodeId()] = node.GetTitle()
+	}
+	written := 0
+	for _, edge := range resp.GetEdges() {
+		label := relationName(edge.GetKind())
+		if label == "" || b.Len() > 4000 {
+			continue
+		}
+		if written == 0 {
+			b.WriteString("\nRelations:")
+		}
+		fmt.Fprintf(b, "\n- %s: %s -> %s", label, shortTitle(titles[edge.GetFromNodeId()]), shortTitle(titles[edge.GetToNodeId()]))
+		written++
+		if written >= 12 {
+			break
+		}
+	}
+}
+
+func shortTitle(title string) string {
+	title = strings.TrimSpace(title)
+	if len(title) > 80 {
+		return title[:80]
+	}
+	return title
+}
+
+func relationName(kind graphv1.EdgeKind) string {
+	switch kind {
+	case graphv1.EdgeKind_EDGE_KIND_SUPPORTS:
+		return "SUPPORTS"
+	case graphv1.EdgeKind_EDGE_KIND_CONTRADICTS:
+		return "CONTRADICTS"
+	default:
+		return ""
+	}
 }
 
 func kindName(kind graphv1.NodeKind) string {
