@@ -27,6 +27,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	sessionv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/session/v1"
+	"github.com/Darth-S1d1ous/Termitaria/internal/bus"
 	"github.com/Darth-S1d1ous/Termitaria/internal/live"
 	"github.com/Darth-S1d1ous/Termitaria/internal/session"
 	"github.com/Darth-S1d1ous/Termitaria/internal/swarm"
@@ -47,14 +48,30 @@ type agentJSON struct {
 	DisplayName string   `json:"display_name"`
 	Kind        string   `json:"kind"`
 	Tools       []string `json:"tools,omitempty"`
+	Skills      []string `json:"skills,omitempty"`
+}
+
+type seedJSON struct {
+	ID    string `json:"id"`
+	Kind  string `json:"kind"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
+
+type artifactJSON struct {
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`
+	Bytes int    `json:"bytes"`
 }
 
 type projectJSON struct {
-	ID     string      `json:"id"`
-	Name   string      `json:"name"`
-	Goal   string      `json:"goal"`
-	Agents []agentJSON `json:"agents"`
-	Steps  []stepJSON  `json:"steps,omitempty"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Goal      string         `json:"goal"`
+	Agents    []agentJSON    `json:"agents"`
+	Steps     []stepJSON     `json:"steps,omitempty"`
+	Seeds     []seedJSON     `json:"seeds,omitempty"`
+	Artifacts []artifactJSON `json:"artifacts,omitempty"`
 }
 
 type stateFile struct {
@@ -82,6 +99,7 @@ type Server struct {
 	replyTimeout time.Duration
 	hub          *live.Hub
 	fanout       interface{ Stop() }
+	bus          *bus.Bus
 
 	mu       sync.Mutex
 	path     string
@@ -148,7 +166,11 @@ func projectFromSpec(id string, spec *swarm.Spec) *projectJSON {
 		Goal: spec.Goal,
 	}
 	for _, a := range spec.Agents {
-		p.Agents = append(p.Agents, agentJSON{ID: a.ID, DisplayName: a.DisplayName, Kind: a.Kind, Tools: append([]string(nil), a.Tools...)})
+		p.Agents = append(p.Agents, agentJSON{
+			ID: a.ID, DisplayName: a.DisplayName, Kind: a.Kind,
+			Tools:  append([]string(nil), a.Tools...),
+			Skills: append([]string(nil), a.Skills...),
+		})
 	}
 	return p
 }
@@ -188,6 +210,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/topology", s.topology)
 	mux.HandleFunc("POST /api/projects/{id}/delegate", s.delegate)
 	mux.HandleFunc("POST /api/projects/{id}/steps", s.updateStep)
+	mux.HandleFunc("POST /api/projects/{id}/artifacts", s.createArtifact)
+	mux.HandleFunc("GET /api/projects/{id}/artifacts/{name}", s.getArtifact)
+	mux.HandleFunc("GET /api/projects/{id}/knowledge", s.projectGraph)
 	mux.HandleFunc("GET /api/memory-graph", s.memoryGraph)
 	mux.HandleFunc("GET /api/ws", s.serveWS)
 	return cors(mux)
@@ -282,9 +307,10 @@ func (s *Server) listSpecs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name string `json:"name"`
-		Goal string `json:"goal"`
-		Spec string `json:"spec"`
+		Name  string     `json:"name"`
+		Goal  string     `json:"goal"`
+		Spec  string     `json:"spec"`
+		Seeds []seedJSON `json:"seeds"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "bad json")
@@ -298,7 +324,16 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, err.Error())
 			return
 		}
+		if err := checkSkills(spec); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
 		compiled = spec
+	}
+	seeds, err := normalizeSeeds(body.Seeds)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
 	}
 	if name == "" && compiled == nil {
 		writeError(w, 400, "name is required")
@@ -324,6 +359,14 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			p.Goal = s.template.Goal
 		}
 		s.startProject(p)
+	}
+	p.Seeds = seeds
+	for _, seed := range p.Seeds {
+		mime := "text/plain"
+		if seed.Kind == "link" {
+			mime = "application/link"
+		}
+		s.publishDocument(r.Context(), p.ID, seed.ID, seed.Title, seed.Body, mime)
 	}
 	p.Steps = newPlan(p.Goal)
 	if err := s.announcePlan(r.Context(), p); err != nil {

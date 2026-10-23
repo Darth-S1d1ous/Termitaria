@@ -45,7 +45,7 @@ services:
       timeout: 3s
       retries: 10
 
-  # 记忆召回的候选生成（欧氏近邻；最终排序由 Poincaré 距离完成）
+  # episode 向量，Mem0 做近邻检索
   qdrant:
     image: qdrant/qdrant:latest
     ports:

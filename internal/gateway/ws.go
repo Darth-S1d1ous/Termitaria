@@ -22,6 +22,7 @@ import (
 
 // Start 订阅 delta、presence 和 session 事件，转成 WebSocket 帧。
 func (s *Server) Start(ctx context.Context, b *bus.Bus) error {
+	s.bus = b
 	if _, err := b.Conn().Subscribe(bus.TaskDeltaAll, s.onDelta); err != nil {
 		return err
 	}

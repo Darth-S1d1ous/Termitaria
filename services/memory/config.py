@@ -1,7 +1,9 @@
 """memory 服务运行配置，全部走环境变量（风格对齐 services/worker/config.py）。
 
-MEMORY_BACKEND=canned（默认）| mem0 | graphiti。
-后两个需要：uv sync --extra memory
+MEMORY_BACKEND=canned（默认）| agent | mem0 | graphiti。
+agent 是每个 agent 一份：Postgres 存条目，Qdrant 存该 agent 的 episode 向量。
+POSTGRES_DSN 默认 postgresql://termitaria:termitaria@localhost:5432/termitaria。
+mem0 / graphiti 需要：uv sync --extra memory
   docker compose up -d qdrant      # mem0，QDRANT_HOST / QDRANT_PORT
   docker compose up -d falkordb    # graphiti，浏览器在宿主机 3001
 抽取用的聊天模型：
@@ -32,6 +34,7 @@ class MemoryConfig:
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
     qdrant_collection: str = "termitaria_mem0"
+    postgres_dsn: str = "postgresql://termitaria:termitaria@localhost:5432/termitaria"
     falkordb_host: str = "localhost"
     falkordb_port: int = 6379
     http_addr: str = "127.0.0.1:8791"
@@ -62,6 +65,10 @@ class MemoryConfig:
             qdrant_host=os.environ.get("QDRANT_HOST", "localhost"),
             qdrant_port=int(os.environ.get("QDRANT_PORT", "6333")),
             qdrant_collection=os.environ.get("QDRANT_COLLECTION", "termitaria_mem0"),
+            postgres_dsn=os.environ.get(
+                "POSTGRES_DSN",
+                "postgresql://termitaria:termitaria@localhost:5432/termitaria",
+            ),
             falkordb_host=os.environ.get("FALKORDB_HOST", "localhost"),
             falkordb_port=int(os.environ.get("FALKORDB_PORT", "6379")),
             http_addr=os.environ.get("MEMORY_HTTP_ADDR", "127.0.0.1:8791").strip()

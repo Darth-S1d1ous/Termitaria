@@ -9,11 +9,10 @@ import logging
 
 import nats
 
-from .canned import install
 from .config import GraphConfig
 from .ingest import Ingestor
 from .server import serve
-from .store import InMemoryGraph
+from .runtime_store import open_store
 
 
 async def amain() -> None:
@@ -21,9 +20,7 @@ async def amain() -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
     cfg = GraphConfig.from_env()
-    store = InMemoryGraph()
-    if cfg.load_canned:
-        await install(store)
+    store = await open_store(cfg)
 
     nc = await nats.connect(cfg.nats_url, name="termitaria-graph")
     server = await serve(cfg.grpc_addr, store)

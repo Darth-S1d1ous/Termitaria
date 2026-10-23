@@ -14,12 +14,12 @@ import os
 
 from google.protobuf.json_format import MessageToJson
 
-from termitaria.graph.v1 import graph_pb2
 from termitaria.memory.v1 import memory_pb2
 
 from services.common import envelope
 
 from .config import GraphConfig
+from .project_graph import ingest_document
 from .store import GraphStore
 
 log = logging.getLogger(__name__)
@@ -75,19 +75,8 @@ class Ingestor:
         log.info("ingested doc=%s → %s (trace=%s)", req.document.doc_id, node_id, env.trace_id)
 
     async def _ingest(self, doc: memory_pb2.Document, trace_id: str) -> str:
-        # TODO(colleague)：
-        # 1. chunk：按 content_ref 取正文（大对象不走 bus，contracts §1.4）；
-        # 2. embed；
-        # 3. LLM 抽 claim / citation；
-        # 4. claim 节点 id = hash(doc_id + chunk_index)，边 CITES / DERIVES_FROM upsert。
-        log.info("[stub] skip extract doc=%s trace=%s", doc.doc_id, trace_id)
-        node = graph_pb2.Node(
-            node_id=document_node_id(doc.doc_id or "anon"),
-            kind=graph_pb2.NODE_KIND_DOCUMENT,
-            title=doc.title,
-            uri=doc.uri,
-        )
-        return await self._store.upsert_node(node)
+        log.info("ingest doc=%s trace=%s", doc.doc_id, trace_id)
+        return await ingest_document(self._store, doc)
 
     def _spool(self, env, req: memory_pb2.WriteDocumentRequest) -> None:
         line = {

@@ -48,8 +48,8 @@ brain: "Intelligence Plane (Python)" {
 mem: "Memory Plane" {
   style.border-radius: 8
   style.stroke-dash: 4
-  kg: "Knowledge Graph\n(FalkorDB)"
-  am: "Agent Memory\nPostgres + Poincaré svc"
+  kg: "Knowledge Graph\nFalkorDB · one graph per project"
+  am: "Agent Memory\nPostgres + Qdrant · one store per agent"
 }
 
 client <-> cp.gw: "messages · streams"
@@ -60,16 +60,17 @@ runtime.sess <-> bus.s1: "agent↔agent\n1..n sessions"
 runtime.sess -> bus.s2: "reasoning task"
 bus.s2 -> brain.lg: "consume"
 brain.lg -> brain.llm: "chat completions"
-brain.lg <-> bus.s3: "memory read / write"
-bus.s3 <-> mem.kg: "upsert nodes / edges"
-bus.s3 <-> mem.am: "recall / write episode"
+runtime.sess -> bus.s3: "prefetch before dispatch"
+bus.s3 -> mem.kg: "this project's subgraph"
+bus.s3 -> mem.am: "this agent's recall"
 runtime.policy -> cp.gw: "stream deltas to UI"
 
 note: |md
   **Key contracts**
   - `Session` = durable, addressable, 1..n between any pair
   - `SwarmSpec` = declarative graph of agents + allowed sessions
-  - mesh never calls torch in-process; memory is a service
+  - mesh never calls torch in-process
+  - dispatcher prefetches one agent's memory and one project's graph
 | {
   near: bottom-center
   shape: text

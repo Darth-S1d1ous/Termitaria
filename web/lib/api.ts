@@ -36,8 +36,19 @@ export function loadSwarmSpecs() {
   return api<{ specs: SwarmSpecDoc[] }>("/api/swarmspecs");
 }
 
-export function createProject(name: string, spec: string) {
-  return api<Project>("/api/projects", { method: "POST", body: { name, spec } });
+export function createProject(name: string, spec: string, seeds: { kind: string; title: string; body: string }[] = []) {
+  return api<Project>("/api/projects", {
+    method: "POST",
+    body: {
+      name,
+      spec,
+      seeds: seeds.map(({ kind, title, body }) => ({ kind, title, body })),
+    },
+  });
+}
+
+export function artifactURL(projectId: string, name: string) {
+  return `${API}/api/projects/${projectId}/artifacts/${encodeURIComponent(name)}`;
 }
 
 export function deleteProject(projectId: string) {
@@ -56,32 +67,28 @@ export function loadMessages(projectId: string, chatId: string) {
   return api<{ messages: ChatMessage[] }>(`/api/projects/${projectId}/chats/${chatId}/messages`);
 }
 
-export type MemoryNode = {
+export type ProjectGraphNode = {
   id: string;
-  name: string;
-  summary: string;
+  kind: string;
+  title: string;
+  text: string;
 };
 
-export type MemoryEdge = {
+export type ProjectGraphEdge = {
   id: string;
   source: string;
   target: string;
-  fact: string;
-  name: string;
-  valid_at: string;
-  invalid_at: string;
-  expired: boolean;
+  kind: string;
 };
 
-export type MemoryGraph = {
-  backend: string;
-  agent_id: string;
-  nodes: MemoryNode[];
-  edges: MemoryEdge[];
+export type ProjectGraph = {
+  project_id: string;
+  nodes: ProjectGraphNode[];
+  edges: ProjectGraphEdge[];
 };
 
-export function loadMemoryGraph(agentId: string) {
-  return api<MemoryGraph>(`/api/memory-graph?agent=${encodeURIComponent(agentId)}`);
+export function loadProjectGraph(projectId: string) {
+  return api<ProjectGraph>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`);
 }
 
 export function sendMessage(projectId: string, chatId: string, text: string) {

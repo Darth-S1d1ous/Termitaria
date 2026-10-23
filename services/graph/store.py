@@ -75,6 +75,7 @@ class InMemoryGraph:
             self._edges[stored.edge_id] = stored
             self._adj.setdefault(stored.from_node_id, []).append((stored.to_node_id, stored.edge_id))
             self._adj.setdefault(stored.to_node_id, []).append((stored.from_node_id, stored.edge_id))
+            return stored.edge_id
 
     async def get_node(self, node_id: str) -> graph_pb2.Node:
         async with self._lock:

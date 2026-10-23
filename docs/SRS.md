@@ -18,7 +18,7 @@ Termitaria 是一个高度可定制的 multi-agent harness。复杂智力工作�
 
 - **Client Layer**：Discord 式聊天界面，人与 swarm 多方对话。
 - **Agent Mesh Layer**：agent 两两开多条 session，构成 mesh 而非线性聊天。
-- **Project Memory Layer**：Knowledge Graph（共享知识资产）+ Agent Memory（每 agent 的普通 RAG 记忆）。
+- **Project Memory Layer**：一个 project 两套存储。Knowledge Graph 是这个 project 的一张图。Agent Memory 是每个 agent 自己的一份 RAG 记忆。两套存储互不返回对方的记录，agent 之间的记忆也互不返回。
 
 ### 1.3 定义
 
@@ -28,8 +28,9 @@ Termitaria 是一个高度可定制的 multi-agent harness。复杂智力工作�
 | `SwarmSpec` | 声明式图：节点（agent 类型 + 记忆策略）、边（session 策略） |
 | `Session` | 两个 agent 之间一条可寻址、持久的会话；同一对可并发多条 |
 | `Task` | 一次推理工作项（上下文、预算、回调 stream） |
-| KG | Knowledge Graph，节点=文档/论文/主张，边=引用/推导/依赖 |
-| Episode | agent 的一次具体经历，写入其记忆库 |
+| KG | 一个 project 一张 Knowledge Graph。节点 = `DOCUMENT` / `PAPER` / `CLAIM` / `CONCEPT`，边 = 引用 / 推导 / 依赖 / 支持 / 反驳。不按 agent 切开 |
+| Agent Memory | 一个 agent 一份。只含该 agent 的 role、rules、principle、episode。召回不返回其他 agent 的条目，也不返回 KG 节点 |
+| Episode | 一次 session 结束后写入该 agent 自己的记忆。不写入 KG，也不写入其他 agent |
 | Turn | session 内一次发言权交接 |
 
 ### 1.4 参考
@@ -100,7 +101,7 @@ Client (Next.js) ──WS/REST──> Control Plane (Go)
 | FR-C4 | 用户可在消息下开 thread（每条消息 1..n 线程） | Should |
 | FR-C5 | Swarm View 实时渲染 mesh：agent 为节点、活跃 session 为边，随 session 开合更新 | Must |
 | FR-C6 | 用户可上传文档，触发 KG 入库 | Must |
-| FR-C7 | Memory Inspector：只读查看 KG 节点详情与某 agent 的记忆树 | Should |
+| FR-C7 | Memory Inspector：只读查看该 project 的 KG 节点详情，以及某一个 agent 自己的记忆条目 | Should |
 
 ### 4.2 Control Plane & Agent Mesh（Go）
 
@@ -125,19 +126,19 @@ Client (Next.js) ──WS/REST──> Control Plane (Go)
 | FR-I3 | LLM client 统一走 Token Factory（OpenAI 兼容接口） | Must |
 | FR-I4 | Model router 按角色/预算选模型档位：日常 Nemotron Super，重推理 Ultra；路由是纯配置 | Must |
 | FR-I5 | worker 无状态，按 `tasks.*` 队列深度水平扩缩 | Must |
-| FR-I6 | worker 推理中可经 `memory.*` 读写记忆 | Must |
+| FR-I6 | dispatcher 在入队前预取该 agent 的记忆和该 project 的 KG 种子，放进 `TaskContext`。worker 推理期间不读写 Memory Service 或 Knowledge Graph Service | Must |
 
 ### 4.4 Project Memory（Python）
 
 | 编号 | 需求 | 优先级 |
 | --- | --- | --- |
-| FR-P1 | Memory Service 暴露统一 API：`recall(context, top_k)` / `write_episode` / `write_document` | Must |
-| FR-P2 | 文档入库走 ingest pipeline：chunk → embed → LLM 抽取 claim/citation → 写 KG；异步执行，不阻塞聊天 | Must |
-| FR-P3 | KG 支持子图查询（按节点/边类型遍历） | Must |
-| FR-P4 | Agent Memory 存 role、rules、episodes（Postgres），episode 同时嵌入写入 Qdrant | Must |
-| FR-P5 | 记忆召回走普通 RAG：embed query → Qdrant 近邻检索 → （可选）LLM 重排 | Must |
-| FR-P6 | 召回延迟超预算时可跳过重排直接返回向量检索结果，API 签名不变 | Should |
-| FR-P7 | 记忆写入遵循 policy：决定沉淀什么、衰减策略 | Should |
+| FR-P1 | Memory Service 只服务一个 agent：`recall(agent_id, query, depth, top_k)` / `write_episode`。召回不返回其他 agent 的条目，也不返回 KG 节点 | Must |
+| FR-P2 | 文档走 `memory.write.document` 进 KG ingest：chunk → embed → LLM 抽取 claim/citation → 写入该 project 的图。异步，不阻塞聊天，不写入任何 agent 的记忆 | Must |
+| FR-P3 | Knowledge Graph Service 按 project 提供子图查询。一个 project 一张图。节点为 `DOCUMENT` / `PAPER` / `CLAIM` / `CONCEPT`，边为引用 / 推导 / 依赖 / 支持 / 反驳 | Must |
+| FR-P4 | Agent Memory 按 `agent_id` 隔离。role、rules、principle、episode 存在 Postgres，该 agent 的 episode 向量存在 Qdrant | Must |
+| FR-P5 | Agent Memory 的召回走普通 RAG：embed query → 在该 agent 的 Qdrant 集合里近邻检索 → （可选）LLM 重排。这条路径不查 KG | Must |
+| FR-P6 | 该 agent 的召回延迟超预算时可跳过重排，直接返回向量检索结果，API 签名不变 | Should |
+| FR-P7 | Agent Memory 的写入遵循 policy：决定沉淀什么、衰减策略。policy 不把记录写入 KG，也不写入其他 agent | Should |
 
 ---
 
@@ -186,7 +187,8 @@ Client (Next.js) ──WS/REST──> Control Plane (Go)
 | REST / Connect-RPC（Swarm API） | swarm / agent / session CRUD；Memory Inspector 只读查询 |
 | NATS JetStream | `sessions.*`（持久）、`tasks.*`（任务+结果持久，delta 不持久）、`memory.*` |
 | Token Factory API | OpenAI 兼容 chat completions |
-| Memory Service API | 见 FR-P1，Python 内部服务 |
+| Memory Service | 见 FR-P1。只读写一个 agent 的记忆 |
+| Knowledge Graph Service | 见 FR-P3。只读写一个 project 的图 |
 
 契约细节冻结于 `docs/contracts.md` 与 `proto/`。
 
@@ -194,9 +196,9 @@ Client (Next.js) ──WS/REST──> Control Plane (Go)
 
 ## 7. MVP 边界
 
-**做**：单 workspace；频道=swarm；agent 两两 1..n session；KG 入库与查询；普通 RAG 记忆召回（单 agent）；Token Factory 接入 + 模型分层。
+**做**：单 workspace；频道=swarm；agent 两两 1..n session；一个 project 一张 KG，入库与查询；每个 agent 单独做 RAG 召回；Token Factory 接入 + 模型分层。
 
-**不做**：多租户与计费；WASM 工具沙箱（Rust）；Temporal 耐久执行；跨 workspace 联邦；层级/双曲几何记忆（Poincaré 等，留作后续探索）。
+**不做**：多租户与计费；WASM 工具沙箱（Rust）；Temporal 耐久执行；跨 workspace 联邦。
 
 ---
 

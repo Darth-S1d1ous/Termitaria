@@ -59,6 +59,12 @@
           "default": [],
           "description": "工具 ACL 白名单，Policy 组件在运行时执行"
         },
+        "skills": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+          "default": [],
+          "description": "这个 agent 可以 load_skill 的技能名，对应 skills/*.md。未列出的技能不会进它的提示。"
+        },
         "memory": { "$ref": "#/$defs/memoryPolicy" },
         "budget": { "$ref": "#/$defs/budget" }
       }

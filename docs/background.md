@@ -24,9 +24,9 @@ Termitaria is organized into three layers (see `images/architecture-1.png`):
 
 2. **Agent Mesh Layer** — beneath the UI, agents talk to *each other*. Any agent can open one or more sessions with any other agent, forming a peer-to-peer mesh rather than a hub-and-spoke hierarchy. A "reviewer" agent can challenge a "researcher" agent directly; a "data engineer" agent can be pulled into a session only when needed.
 
-3. **Project Memory Layer** — the shared substrate every agent reads from and writes to:
-   - **Knowledge Graph**: every document a user adds and every important paper an agent finds becomes a node, with edges capturing citations, derivations, and dependencies. Knowledge compounds across sessions instead of evaporating.
-   - **Agent Memory**: each agent carries its own role, rules, and a hierarchical memory organized on a Poincaré ball — hyperbolic geometry that naturally embeds tree-like structures, so an agent's memory is organized from broad principles down to fine-grained episodes.
+3. **Project Memory Layer** — two stores for one project. They do not share records.
+   - **Knowledge Graph**: one FalkorDB graph per project. Nodes are `DOCUMENT`, `PAPER`, `CLAIM`, and `CONCEPT`. Edges are citations, derivations, dependencies, support, and contradiction. Every agent in the project can read this graph. An agent in another project cannot. The graph is not split per agent.
+   - **Agent Memory**: one store per agent (role, rules, principles, episodes). A recall returns only that agent's items. It does not return another agent's items, and it does not return graph nodes. A later session of the same agent can read what that agent saved earlier.
 
 ### Customization
 

@@ -1,0 +1,65 @@
+"""agent 记忆按 agent_id 隔离，文档不进这套存储。"""
+from __future__ import annotations
+
+import asyncio
+
+import services
+from termitaria.memory.v1 import memory_pb2
+
+from services.memory.agent_backend import AgentBackend, LocalVectors, MemoryRows, hash_embed
+from services.memory.config import MemoryConfig
+
+
+class _Embed:
+    dims = 32
+
+    def embed(self, text: str) -> list[float]:
+        return hash_embed(text, self.dims)
+
+
+def _backend() -> AgentBackend:
+    cfg = MemoryConfig(nats_url="nats://localhost:4222", backend="agent")
+    backend = AgentBackend(cfg, rows=MemoryRows(), vectors=LocalVectors(), embed=_Embed())
+    return backend
+
+
+def test_recall_stays_inside_one_agent():
+    backend = _backend()
+
+    async def run() -> None:
+        await backend.write_episode(
+            memory_pb2.WriteEpisodeRequest(
+                episode=memory_pb2.Episode(
+                    agent_id="researcher",
+                    session_id="s1",
+                    summary="Northwire quoted 4.80 dollars per kilogram for busbar wire.",
+                )
+            )
+        )
+        await backend.write_episode(
+            memory_pb2.WriteEpisodeRequest(
+                episode=memory_pb2.Episode(
+                    agent_id="critic",
+                    session_id="s1",
+                    summary="The critic wants a source for every number.",
+                )
+            )
+        )
+        researcher = await backend.recall(
+            memory_pb2.RecallRequest(agent_id="researcher", query_text="busbar wire price", top_k=5)
+        )
+        critic = await backend.recall(
+            memory_pb2.RecallRequest(agent_id="critic", query_text="busbar wire price", top_k=5)
+        )
+        assert [item.agent_id for item in researcher.items] == ["researcher"]
+        assert "4.80" in researcher.items[0].text
+        assert all(item.agent_id == "critic" for item in critic.items)
+        assert all("4.80" not in item.text for item in critic.items)
+        empty = await backend.write_document(
+            memory_pb2.WriteDocumentRequest(
+                document=memory_pb2.Document(doc_id="p1/memo", title="memo", content_ref="body")
+            )
+        )
+        assert empty == ""
+
+    asyncio.run(run())

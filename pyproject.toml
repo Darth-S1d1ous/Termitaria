@@ -20,6 +20,7 @@ memory = [
     "qdrant-client",
     "graphiti-core[falkordb]",
     "sentence-transformers",
+    "psycopg[binary]",
 ]
 
 # 纯依赖清单 + pytest 配置：代码以源码方式从仓库根运行（python -m services.worker.main），

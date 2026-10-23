@@ -36,15 +36,15 @@ def _edge(edge_id: str, src: str, dst: str, kind: int) -> graph_pb2.Edge:
 
 _NODES = (
     _node(DOC, graph_pb2.NODE_KIND_DOCUMENT, "Swarm memory notes", {"uploader": "u1"}),
-    _node(PAPER, graph_pb2.NODE_KIND_PAPER, "Poincaré Embeddings",
-          {"authors": "Nickel, Kiela", "year": 2017}),
+    _node(PAPER, graph_pb2.NODE_KIND_PAPER, "Retrieval Augmented Generation",
+          {"authors": "Lewis et al.", "year": 2020}),
     _node(CLAIM, graph_pb2.NODE_KIND_CLAIM,
-          "Hyperbolic distance ranks abstract principles nearer the origin",
+          "Retrieved passages should be cited in the answer",
           {"doc_id": DOC}),
     _node(CLAIM_CONTRA, graph_pb2.NODE_KIND_CLAIM,
-          "Euclidean embeddings are sufficient for hierarchical memory",
+          "The model can answer without opening the source",
           {"doc_id": DOC}),
-    _node(CONCEPT, graph_pb2.NODE_KIND_CONCEPT, "Poincaré ball", {}),
+    _node(CONCEPT, graph_pb2.NODE_KIND_CONCEPT, "Citation", {}),
 )
 
 _EDGES = (

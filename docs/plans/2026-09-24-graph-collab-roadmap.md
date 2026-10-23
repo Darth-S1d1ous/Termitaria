@@ -1,5 +1,7 @@
 # Knowledge Graph 模块协作路线（2026-09-24）
 
+> 范围（仍有效）：知识图是 project 级的一张图，不按 agent 切开。节点是 `DOCUMENT`、`PAPER`、`CLAIM`、`CONCEPT`。agent 记忆不写入这张图。下文「`recalled` 仍为空」是 2026-09-24 当天的代码状态，不是现行结构。现行说明见 `docs/concepts.md` §4。
+
 > 背景：同事即将开始 Knowledge Graph 模块开发。本路线规划需要准备什么，
 > 以让同事第一天就能开工、双方并行不互堵。模式复用
 > [memory 协作路线](2026-09-20-memory-collab-roadmap.md)（John 做外壳 stub + 同事填内核）。

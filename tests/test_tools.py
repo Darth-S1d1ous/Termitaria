@@ -7,10 +7,23 @@ from services.worker.graph import build_graph
 from services.worker.model import Chunk, Done
 from services.worker.runner import TaskRunner
 from services.worker.skills import load_skills
-from services.worker.tools import mention_delegates, parse_tool_calls
+from services.worker.rules import load_rules
+from services.worker.tools import Toolbox, Tool, mention_delegates, parse_tool_calls
 from termitaria.task.v1 import task_pb2
 
 from test_worker_offline import FakeNC, make_task
+
+
+def test_reply_follows_the_user_language():
+    rules = load_rules(Path("rules"))
+    assert "Reply in the user's language." in rules
+
+    async def _noop(_arguments):
+        return ""
+
+    text = Toolbox([Tool("web_search", "search", _noop)]).instructions()
+    assert "English" not in text
+    assert "language" not in text
 
 
 def test_load_skill_keeps_name_argument():
@@ -158,6 +171,106 @@ def test_closing_round_runs_text_calls_then_asks_for_prose(tmp_path, monkeypatch
         delta = envelope.unpack(data, task_pb2.TaskDelta)[1]
         streamed.append(delta.text)
     assert "write_file" not in "".join(streamed)
+
+
+def test_search_reports_missing_key(monkeypatch):
+    monkeypatch.setattr("services.worker.tools._search_key", lambda: "")
+    from services.worker.tools import _search_blocking
+
+    assert "SEARCH_API_KEY" in _search_blocking("copper")
+
+
+def test_filings_skill_adds_edgar():
+    from services.worker.skills import Skill
+    from services.worker.tools import make_toolbox
+
+    market = make_toolbox(
+        agent={"id": "researcher", "kind": "WORKER", "tools": ["web_search"], "skills": ["market-data"]},
+        project_id="p",
+        steps=[],
+        skills=[Skill("market-data", "prices", "yahoo")],
+        mcp_tools=[],
+        gateway="http://127.0.0.1:9",
+    )
+    filings = make_toolbox(
+        agent={"id": "researcher", "kind": "WORKER", "tools": ["web_search"], "skills": ["filings"]},
+        project_id="p",
+        steps=[],
+        skills=[Skill("filings", "pdf", "call edgar")],
+        mcp_tools=[],
+        gateway="http://127.0.0.1:9",
+    )
+    assert "load_skill" in market.names()
+    assert "edgar" not in market.names()
+    assert "edgar" in filings.names()
+
+
+def test_ask_user_rejects_a_vague_question():
+    from services.worker.tools import _ask_user
+
+    text = asyncio.run(_ask_user({"known": "short", "question": "huh"}))
+    assert text.startswith("ask_user needs")
+
+
+def test_deck_is_a_pptx():
+    import io
+    import zipfile
+
+    from services.worker.deck import build_pptx
+
+    raw = build_pptx("Copper", [
+        {"title": "Move", "bullets": ["COMEX fell"]},
+        {"title": "Why", "bullets": ["No sourced cause"]},
+        {"title": "Watch", "bullets": ["LME stocks"]},
+    ])
+    assert len(raw) >= 800
+    with zipfile.ZipFile(io.BytesIO(raw)) as package:
+        xml = package.read("ppt/slides/slide1.xml").decode()
+    assert "Move" in xml
+
+
+def test_orchestrator_asks_instead_of_stopping(monkeypatch):
+    monkeypatch.setattr(
+        "services.worker.graph.load_project",
+        lambda gateway, project_id: {
+            "id": "p1",
+            "steps": [{"id": "s1", "label": "Price the week", "state": "active"}],
+            "agents": [
+                {"id": "pi", "kind": "ORCHESTRATOR", "tools": ["ledger"], "skills": []},
+                {
+                    "id": "researcher",
+                    "display_name": "Market Researcher",
+                    "kind": "WORKER",
+                    "skills": ["market-data"],
+                    "tools": ["web_search"],
+                },
+            ],
+            "seeds": [{"kind": "text", "title": "LME", "body": "LME copper closed at 9840."}],
+        },
+    )
+
+    class Scripted:
+        def __init__(self):
+            self.round = 0
+
+        async def stream(self, **kwargs):
+            self.round += 1
+            if self.round == 1:
+                yield Chunk("I will stop here.")
+            else:
+                yield Chunk(
+                    '{"tool":"ask_user","question":"Which producer should the filings cover?",'
+                    '"known":"COMEX copper fell about 2.5 percent last week on the Yahoo chart, and the seed note quotes LME at 9840."}'
+                )
+            yield Done(task_pb2.TaskUsage(model="scripted"))
+
+    task = make_task()
+    task.agent_id = "pi"
+    task.swarm_id = "p1"
+    result = asyncio.run(TaskRunner(FakeNC(), Scripted(), producer="test").run(task, "trace"))
+    body = result.message.content[0].text
+    assert "Which producer" in body
+    assert "I will stop here." not in body
 
 
 def test_graph_builds():

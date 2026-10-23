@@ -22,8 +22,8 @@ Termitaria gives you not one smarter agent, but the tools to build **smarter org
 
 ### 2. Memory Layer — the colony remembers
 
-- **Knowledge Graph** (FalkorDB): every user document and every important paper an agent discovers becomes a node; edges capture citations, derivations, and dependencies. Knowledge compounds across sessions into a durable, queryable asset instead of evaporating.
-- **Hierarchical agent memory on the Poincaré ball**: each agent's memory — role, rules, episodes — is embedded in hyperbolic space (PyTorch / geoopt), which natively embeds tree-like structure. Recall is hierarchy-aware: broad principles at the center, fine-grained episodes at the edge. Qdrant serves only Euclidean candidate generation; final ranking is done by **Poincaré distance**.
+- **Knowledge Graph** (FalkorDB): one graph per project. Nodes are `DOCUMENT`, `PAPER`, `CLAIM`, and `CONCEPT`. Edges are citations, derivations, dependencies, support, and contradiction. Every agent in the project can read it. The graph is not split per agent.
+- **Agent memory**: one store per agent (role, rules, principles, episodes). A recall returns only that agent's items. It does not return another agent's memory, and it does not return graph nodes. Qdrant stores that agent's vectors. Postgres stores the items.
 
 ## Architecture
 
@@ -36,7 +36,7 @@ Termitaria gives you not one smarter agent, but the tools to build **smarter org
 │  Bus                 NATS JetStream (sessions / tasks / memory)│
 ├─────────────────────────────────────────────────────────────┤
 │  Intelligence (Py)   LangGraph workers · LLM client           │
-│  Memory       (Py)   Knowledge Graph · Poincaré Agent Memory  │
+│  Memory       (Py)   Knowledge Graph · Agent Memory           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -49,43 +49,9 @@ Go control plane for scheduling, sessions, and the gateway; Python intelligence 
 | LLM serving | **Nebius Token Factory** (OpenAI-compatible), model routing across **NVIDIA Nemotron** tiers — Super for daily interaction, Ultra for deep reasoning |
 | Control plane | Go · NATS JetStream |
 | Intelligence plane | Python · LangGraph |
-| Memory | FalkorDB (KG) · Postgres + Poincaré embedding service (agent memory) · Qdrant (candidates) |
+| Memory | FalkorDB, one graph per project · Postgres + Qdrant, one store per agent |
 | Client | Next.js 15 · React · shadcn/ui · WebSocket streaming |
 
 ## Status
 
-MVP in active development. See [`docs/concepts.md`](docs/concepts.md) for the domain language, [`docs/architecture.md`](docs/architecture.md) for the L1 architecture, and [`docs/background.md`](docs/background.md) for the motivation.
-
-## Memory
-
-Each agent has its own store. A later project that uses the same agent can read facts saved earlier. The service writes a user sentence once, to every agent in that chat. Assistant replies are not stored.
-
-Choose the backend in `.env`, then restart `make up`:
-
-```
-MEMORY_BACKEND=graphiti
-```
-You can also have `mem0` and `canned` instead of `graphiti`.
-
-`mem0` and `graphiti` additionally need `MEMORY_LLM_API_KEY` and `MEMORY_LLM_MODEL`. If the key, the model name, or the database is missing, the service falls back to `canned`.
-
-Example `.env`:
-```
-MEMORY_BACKEND=graphiti
-MODEL_PROVIDER=deepseek
-DEEPSEEK_API_KEY=sk-xxx
-DEEPSEEK_MODEL=deepseek-flash
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-
-MEMORY_LLM_API_KEY="$DEEPSEEK_API_KEY" 
-MEMORY_LLM_BASE_URL="$DEEPSEEK_BASE_URL"
-MEMORY_LLM_MODEL="$DEEPSEEK_MODEL"
-```
-
-- `canned` is the default. It returns a few fixed lines and stores nothing.
-- `mem0` saves each user sentence as written, in Qdrant. Start the database with `docker compose up -d qdrant`.
-- `graphiti` turns those sentences into a graph in FalkorDB, one graph per agent. Entities are nodes. Facts are edges, and an older edge can expire when a later fact replaces it. Start the database with `docker compose up -d falkordb`.
-
-The Knowledge page draws that Graphiti graph for the selected agent. With `mem0` or `canned`, the page stays empty.
-
-A restart still knows which agent an open chat belongs to. Before the model answers, recall runs and the worker places up to five remembered sentences in the prompt.
+MVP in active development. See [`docs/concepts.md`](docs/concepts.md) for the domain language, [`docs/architecture.md`](docs/architecture.md) for the L1 architecture, and [`docs/background.md`](docs/background.md) for the motivation. The two memory stores are specified in [`docs/concepts.md`](docs/concepts.md) §4.

@@ -1,5 +1,7 @@
 # Python 侧完善与 Memory 模块协作路线（2026-09-20）
 
+> 范围更正（2026-10-23）：agent 记忆和 project 知识图是两个服务、两套存储。一个 project 一张图。一个 agent 一份记忆。两边互不返回对方的记录。ingest 与 FalkorDB 归 Knowledge Graph，不归 Memory Service。现行说明见 `docs/concepts.md` §4。本文件把 ingest 划给 memory 同事的句子，以 `2026-09-24-graph-collab-roadmap.md` 为准。
+
 > 背景：同事即将开始 Memory 模块（记忆服务）开发。本路线规划 Python 侧需要完善什么，
 > 以让同事第一天就能开工、双方并行不互堵。
 >
@@ -18,13 +20,13 @@
 3. **Go dispatcher 做 recall 预取**（dispatch 前 request-reply，结果塞进 TaskContext），
    维持 worker 无状态。L1-mesh 图缺 `runtime → bus.s3` 这条边，属文档卫生项。
 4. **reflection（EPISODE→PRINCIPLE 晋升，Generative Agents 模式）列入同事 backlog**——
-   阈值触发、服务内部闭环，是 Poincaré 层级故事的亮点。
+   阈值触发、服务内部闭环。
 
 ## 分工边界
 
 | 方 | 拥有 |
 | --- | --- |
-| 同事 | Memory 服务本体：recall（Qdrant 候选 → Poincaré 精排）、存储、ingest pipeline、episode 自沉淀、reflection（backlog） |
+| 同事 | Memory 服务本体：recall（Qdrant 近邻检索）、存储、ingest pipeline、episode 自沉淀、reflection（backlog） |
 | John | 总线集成外壳：`services/memory/` 骨架（同事接手填充内核）、Go dispatcher recall 预取、session 事件重放工具、worker LLM client |
 
 关键结论：**worker 不需要为 memory 改任何代码**——读路径走 TaskContext（已就绪），
@@ -35,7 +37,7 @@
 过 `memory.proto` + contracts §2/§3.3，对齐议题：
 
 - [ ] episode 自沉淀方案确认（本计划决策 1；同事接受则 contracts §2 生产方需修正）
-- [ ] `degraded` 降级语义（欧氏兜底，接口不变）、召回预算 50–200ms 的超时行为
+- [ ] `degraded` 降级语义（后端不可用时退回罐装记忆，接口不变）、召回预算 50–200ms 的超时行为
 - [ ] `Budget.deadline_ms` 语义：proto 是绝对 epoch ms，`swarmspec.schema.json` 注释
       是相对毫秒——约定由 SwarmSpec loader 入队时换算成绝对时间
 - [ ] 幂等键：`event_id`（ULID）去重约定；write 路径至少一次投递
@@ -48,8 +50,7 @@ John 建包，**按「同事将接手填充内核」的标准写**——总线�
 - [ ] `services/memory/config.py`：env 配置（NATS_URL 等，风格对齐 `services/worker/config.py`）
 - [ ] `services/memory/server.py`：订阅 `memory.recall`（request-reply）与
       `memory.write.episode` / `memory.write.document`（JetStream pull）；
-      recall 返回罐装 `MemoryItem`（含 ROLE/RULE/PRINCIPLE 各一，带 `poincare_radius`
-      与 `parent_id`，让层级字段可测）；write 落盘 JSONL 便于查看
+      recall 返回罐装 `MemoryItem`（含 ROLE/RULE/PRINCIPLE 各一）；write 落盘 JSONL 便于查看
 - [ ] `services/memory/distiller.py`（stub）：订阅 `sessions.*` 的 `SessionClosed`，
       打日志——决策 1 的占位，同事填蒸馏逻辑
 - [ ] 复用 `services/worker/envelope.py`（考虑上移到 `services/common/`，两包共用）

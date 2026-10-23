@@ -14,7 +14,7 @@ from services.memory.config import MemoryConfig
 from services.memory.distiller import Distiller
 from services.memory.mem0_backend import add_messages
 from services.memory.graph_view import build_graph_view, empty_graph_view
-from services.memory.items import assemble_response, graphiti_items, mem0_items, principle_id, rule_id
+from services.memory.items import assemble_response, graphiti_items, mem0_items, principle_id
 from services.memory.server import RecallResponder
 
 _ENV_KEYS = (
@@ -98,15 +98,13 @@ def test_mem0_hit_maps_to_episode_under_the_rule():
     assert len(resp.items) == 1
     item = resp.items[0]
     assert item.kind == memory_pb2.MEMORY_KIND_EPISODE
-    assert item.poincare_radius == 0.90
-    assert item.parent_id == rule_id("pi")
     assert item.source_session_id == "s1"
     assert item.score == 0.8
     assert item.occurred_at_ms == 50
     assert item.text == "Ada likes tea"
 
 
-def test_graphiti_nodes_and_edges_keep_depth_radius_and_parent():
+def test_graphiti_nodes_and_edges_keep_kind_and_depth_filter():
     nodes = [{"uuid": "n1", "summary": "Tea is a drink", "name": "Tea"}]
     edges = [
         {
@@ -125,14 +123,10 @@ def test_graphiti_nodes_and_edges_keep_depth_radius_and_parent():
     by_kind = {it.kind: it for it in auto.items}
     principle = by_kind[memory_pb2.MEMORY_KIND_PRINCIPLE]
     episode = by_kind[memory_pb2.MEMORY_KIND_EPISODE]
-    assert principle.poincare_radius == 0.55
-    assert principle.parent_id == rule_id("pi")
     assert principle.item_id == principle_id("pi", "n1")
-    assert episode.poincare_radius == 0.90
-    assert episode.parent_id == principle.item_id
     assert episode.occurred_at_ms == 1_700_000_000_000
-    assert by_kind[memory_pb2.MEMORY_KIND_ROLE].parent_id == ""
-    assert by_kind[memory_pb2.MEMORY_KIND_RULE].parent_id == by_kind[memory_pb2.MEMORY_KIND_ROLE].item_id
+    assert memory_pb2.MEMORY_KIND_ROLE in by_kind
+    assert memory_pb2.MEMORY_KIND_RULE in by_kind
 
     principles = assemble_response(
         memory_pb2.RecallRequest(
@@ -189,7 +183,7 @@ def _agent_line(text: str) -> session_pb2.Message:
     return message
 
 
-def test_distiller_writes_each_user_line_and_skips_close():
+def test_distiller_writes_one_episode_per_agent_when_the_session_closes():
     async def run() -> None:
         js = _JS()
         distiller = Distiller(_NC(js), MemoryConfig(nats_url="nats://localhost:4222"))
@@ -220,8 +214,10 @@ def test_distiller_writes_each_user_line_and_skips_close():
             swarm_id="sw1",
             closed=session_pb2.SessionClosed(reason="done"),
         )
-        for ev in (opened, user_line, agent_line, closed):
+        for ev in (opened, user_line, agent_line):
             await distiller._handle(_event(ev))
+        assert js.published == []
+        await distiller._handle(_event(closed))
 
         assert distiller.fanned_out == [("s1", "ideator"), ("s1", "reviewer")]
         assert [subject for subject, _ in js.published] == [
@@ -234,8 +230,8 @@ def test_distiller_writes_each_user_line_and_skips_close():
             episodes.append(req.episode)
         assert {ep.agent_id for ep in episodes} == {"ideator", "reviewer"}
         assert episodes[0].session_id == "s1"
-        assert episodes[0].summary == "alpha"
-        assert list(episodes[0].salient_spans) == ["alpha"]
+        assert episodes[0].summary == "user: alpha\nideator: beta"
+        assert list(episodes[0].salient_spans) == ["user: alpha", "ideator: beta"]
 
     asyncio.run(run())
 
@@ -286,9 +282,19 @@ def test_distiller_restores_open_sessions_without_rewriting_old_lines():
             message_appended=session_pb2.MessageAppended(message=_user_line("hot chocolate")),
         )
         await distiller._handle(_event(fresh))
+        assert js.published == []
+        await distiller._handle(
+            _event(
+                session_pb2.SessionEvent(
+                    session_id="s1",
+                    swarm_id="sw1",
+                    closed=session_pb2.SessionClosed(reason="done"),
+                )
+            )
+        )
         assert distiller.fanned_out == [("s1", "pi")]
         _, req = envelope.unpack(js.published[0][1], memory_pb2.WriteEpisodeRequest)
-        assert req.episode.summary == "hot chocolate"
+        assert req.episode.summary == "user: butter\nuser: hot chocolate"
 
     asyncio.run(run())
 

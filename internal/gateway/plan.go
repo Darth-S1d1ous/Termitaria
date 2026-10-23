@@ -138,24 +138,13 @@ func (s *Server) updateStep(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 404, "no such step")
 			return
 		}
-		p.Steps[idx].State = state
-		if state == "done" {
-			busy := false
-			for _, step := range p.Steps {
-				if step.State == "active" {
-					busy = true
-					break
-				}
-			}
-			if !busy {
-				for i := range p.Steps {
-					if p.Steps[i].State == "pending" {
-						p.Steps[i].State = "active"
-						break
-					}
-				}
-			}
+		next := applyStep(p.Steps, idx, state)
+		if allDone(next) && !deliverablesReady(p.Artifacts) {
+			s.mu.Unlock()
+			writeError(w, 409, "the project stays open until a report and a deck are stored")
+			return
 		}
+		p.Steps = next
 		steps = p.Steps
 		if err := s.save(); err != nil {
 			s.mu.Unlock()
@@ -171,6 +160,38 @@ func (s *Server) updateStep(w http.ResponseWriter, r *http.Request) {
 	}
 	s.broadcast(projectID, map[string]any{"type": "plan", "steps": steps})
 	writeJSON(w, 200, map[string]any{"steps": steps})
+}
+
+func applyStep(steps []stepJSON, idx int, state string) []stepJSON {
+	next := append([]stepJSON(nil), steps...)
+	next[idx].State = state
+	if state != "done" {
+		return next
+	}
+	for _, step := range next {
+		if step.State == "active" {
+			return next
+		}
+	}
+	for i := range next {
+		if next[i].State == "pending" {
+			next[i].State = "active"
+			return next
+		}
+	}
+	return next
+}
+
+func allDone(steps []stepJSON) bool {
+	if len(steps) == 0 {
+		return false
+	}
+	for _, step := range steps {
+		if step.State != "done" {
+			return false
+		}
+	}
+	return true
 }
 
 func matchStep(steps []stepJSON, label string) int {

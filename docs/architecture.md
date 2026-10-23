@@ -14,7 +14,7 @@
 | 复杂智力工作由「专门角色 + 共享上下文」完成 | `background.md` | agent 必须有独立 role/rules/memory，且能两两开多条 session |
 | 协作是 mesh，不是线性聊天 | `background.md` | 会话是一等公民，可寻址、可持久、可 1..n |
 | 知识要沉淀为可查询资产 | `background.md` | 知识图独立于聊天流，agent 读写 |
-| 分级记忆按 Poincaré ball 组织 | `initial_prompt.md` | 记忆召回需要 PyTorch，故智能面必须是 Python 服务 |
+| 每个 agent 有自己的 role、rules、episode | `background.md` | 记忆服务在 Python 智能面，控制面只做预取 |
 | 高度自定义 swarm | `initial_prompt.md` | swarm 是声明式配置，不是代码 |
 | 参赛要求：跑在 Nebius 上、用 NVIDIA 开源模型 | `criterias.md` | LLM 调用走 Token Factory（OpenAI 兼容），模型分层用 Nemotron |
 
@@ -33,7 +33,7 @@
 │  Bus                 NATS JetStream (sessions / tasks / memory)│
 ├─────────────────────────────────────────────────────────────┤
 │  Intelligence (Py)   LangGraph workers · LLM client           │
-│  Memory       (Py)   Knowledge Graph · Poincaré Agent Memory  │
+│  Memory       (Py)   Knowledge Graph · Agent Memory           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,7 +53,7 @@
 | Chat Surface | 时间线（人+agent 交错）、流式渲染、线程面板 | WebSocket + token delta |
 | Presence & Typing | 在线状态、哪个 agent 正在思考 | WS presence events |
 | Swarm View | 实时 mesh：agent 为节点、session 为边 | WS topology events |
-| Memory Inspector | KG 节点预览、agent 记忆树 | REST 只读 |
+| Memory Inspector | 该 project 的 KG 节点预览；某一个 agent 自己的记忆条目 | REST 只读 |
 
 **MVP 范围**：单 workspace；频道 = swarm；每条 agent 消息流式渲染；swarm view 实时反映 session 开合。
 
@@ -85,7 +85,7 @@
 1. Scheduler 按 `SwarmSpec` 拉起 agent A、B 的 supervisor。
 2. A 的 supervisor 经 Router 向 B 开 session → 写入 `sessions.*`。
 3. A 产生推理任务 → `tasks.*` → Python LangGraph worker 消费。
-4. worker 需要记忆 → `memory.*` → Memory 服务。
+4. dispatcher 在入队前预取：向 Memory Service 要这个 agent 的记忆，向 Knowledge Graph Service 要这个 project 的子图。两者放进 `TaskContext`。worker 推理期间不再访问这两个服务。
 5. 推理 delta 经 Policy → Gateway → UI 流式渲染。
 
 ---
@@ -107,22 +107,35 @@
 
 ![L1 Memory](images/architecture-L1-memory.png)
 
-### 5.1 两个基底，一个 API
+### 5.1 两个存储，两个服务
 
-| 基底 | 内容 | 存储 | 召回 |
-| --- | --- | --- | --- |
-| **Knowledge Graph** | 用户文档、agent 发现的文献；节点=文档/论文/主张，边=引用/推导/依赖 | FalkorDB（属性图） | 子图查询 |
-| **Agent Memory** | role、rules、episode；分级记忆 | Postgres（结构化）+ Poincaré 嵌入服务 | 层级感知召回 |
+一个 project 有两套存储。两边的记录不共用，一次召回只打一个服务。
 
-- **Poincaré 嵌入服务**：PyTorch / geoopt，把记忆组织成双曲球面上的层级（原则 → 细节）。
-- **Qdrant** 只做**候选生成**（欧氏近邻），不是记忆模型本身；最终排序由 Poincaré 距离完成。
-- **Ingest pipeline**：chunk → embed → 用 LLM 抽 claim/citation → 写 KG。
+| 存储 | 范围 | 服务 | 内容 | 介质 | 读 |
+| --- | --- | --- | --- | --- | --- |
+| **Knowledge Graph** | 一个 project 一张图 | `KnowledgeGraphService` | 节点 = `DOCUMENT` / `PAPER` / `CLAIM` / `CONCEPT`；边 = 引用 / 推导 / 依赖 / 支持 / 反驳 | FalkorDB | `QuerySubgraph` |
+| **Agent Memory** | 一个 agent 一份 | `MemoryService` | `ROLE` / `RULE` / `PRINCIPLE` / `EPISODE` | Postgres + Qdrant | 按种类过滤，再取 top_k |
 
-### 5.2 Memory Service API
+- 图按 project 建。这个 project 里的 agent 都能读这张图。另一个 project 的 agent 不能读。图不按 agent 切开。
+- Agent Memory 按 `agent_id` 建。召回只返回这一个 agent 的条目。不返回别的 agent 的条目，也不返回图上的节点。
+- Qdrant 只存这个 agent 的 episode 向量。
+- 文件的作者、年份、摘要写在节点 `props` 里。正文留在对象存储，不进总线。
+- Ingest 是图的唯一写路径：chunk → embed → 抽 claim / citation → 写入这张 project 图。文档不进任何 agent 的记忆。
 
-- `recall(context, level)` → 层级感知召回（先候选后双曲精排）。
-- `write_episode(agent, episode)` / `write_document(doc)`。
-- `policy`：什么该沉淀、衰减策略。
+### 5.2 两个服务各自的 API
+
+**Memory Service**（只碰一个 agent 的记忆）：
+
+- `recall(agent_id, query, depth)` → 按 `RecallDepth` 过滤种类，再取 top_k。后端不可用时退回罐装记忆，并置 `degraded`。
+- `write_episode(agent, episode)` → session 关闭时，每个参与 agent 在自己的库里各写一条。
+- `policy`：什么该沉淀、怎么衰减。policy 不把两个存储并到一起，也不让一个 agent 读另一个 agent。
+
+**Knowledge Graph Service**（只碰这个 project 的图）：
+
+- `QuerySubgraph(seed_node_ids, depth)` → 从这个 project 的图上取子图。
+- ingest 消费 `memory.write.document`，把文档 upsert 成节点和边。`WriteDocument` 的消息定义在 `memory.proto`，消费方是 KG ingest，不是 agent 记忆。
+
+dispatcher 在入队前分别调用上面两个读接口，结果放进 `TaskContext.recalled` 和 `TaskContext.graph_node_ids`。worker 只读这份上下文。
 
 ---
 
@@ -137,7 +150,7 @@
 | 用户 → 单 agent 问答 | 路由 ~1–5 ms | 50–200 ms | 流式 | **首 token 0.3–1 s** / 完成 2–8 s |
 | agent ↔ agent 一轮 session | 开/路由 session ~5–20 ms | 每侧 50–200 ms | 每侧一次推理 | **一轮 3–15 s** |
 | 文档入库 → KG 可查 | — | — | 抽取 1–5 s | **2–10 s**（异步，不阻塞聊天） |
-| 分级记忆召回 | — | 候选 20–50 ms + 精排 20–80 ms | — | **50–200 ms** |
+| 记忆召回 | — | 50–200 ms | — | **50–200 ms** |
 | swarm 冷启动（5 agent） | 调度 + 拉起 supervisor 100–500 ms | 预热记忆 200–800 ms | — | **0.5–2 s** |
 
 ### 6.2 吞吐 / 并发预期（MVP 单机 → 小规模）
@@ -147,7 +160,7 @@
 | 并发活跃 session | 数百～数千 | Python worker 推理吞吐，不是 Go |
 | WS 连接（用户+agent 流） | 数千 | Gateway 内存；可水平扩 |
 | 消息扇出延迟（mesh 内） | p50 < 50 ms | NATS |
-| 记忆写入吞吐 | 数百 ep/s | Postgres / 嵌入服务 |
+| 记忆写入吞吐 | 数百 ep/s | Postgres / Qdrant |
 | LLM 调用 | 受 Token Factory 配额限制 | 用 Nano/Super 分摊日常调用 |
 
 ### 6.3 性能原则
@@ -165,7 +178,7 @@
 | **Technological Implementation** | LLM client 统一走 Token Factory（OpenAI 兼容）；模型路由 Nemotron Super/Ultra | 一次 autoresearch 跑通，展示模型分层与 token 用量 |
 | **Design** | Client 是完整产品（频道/线程/swarm view/memory inspector），不是 demo 脚本 | 现场建一个 swarm 并看它自组织 |
 | **Potential Impact** | 同一 harness 配置成投研/调研/autoresearch | 用 `SwarmSpec` 现场切换两个场景 |
-| **Quality of Idea** | mesh + 知识图 + Poincaré 分级记忆是「更聪明的组织」，非单 agent 套壳 | 展示知识跨 session 沉淀到 KG |
+| **Quality of Idea** | mesh + 一个 project 一张知识图 + 每个 agent 一份隔离的记忆 | 展示知识跨 session 沉淀到这张 project 图，agent 记忆仍只服务该 agent |
 
 **可选加分**：后台 ingest / 长研究任务可跑 **Nebius Serverless Jobs**；嵌入/抽取可放 **Serverless Endpoints**。
 
@@ -173,9 +186,9 @@
 
 ## 8. MVP 边界
 
-**做**：单 workspace；频道=swarm；agent 两两 1..n session；KG 入库与查询；Poincaré 分级召回（单 agent）；Token Factory 接入 + 模型分层。
+**做**：单 workspace；频道=swarm；agent 两两 1..n session；一个 project 一张 KG，入库与查询；每个 agent 单独召回自己的 role、rules、episode；Token Factory 接入 + 模型分层。
 
-**不做（L2/以后）**：多租户与计费；WASM 工具沙箱（Rust）；Temporal 耐久执行；跨 workspace 联邦；Poincaré 嵌入的在线训练。
+**不做（L2/以后）**：多租户与计费；WASM 工具沙箱（Rust）；Temporal 耐久执行；跨 workspace 联邦。
 
 ---
 
@@ -184,6 +197,6 @@
 | 风险 | 对策 |
 | --- | --- |
 | Go↔Python 契约漂移 | 四个接口用 Protobuf/JSON Schema 冻结，CI 校验 |
-| Poincaré 召回质量不达标 | 欧氏候选 + 双曲精排可降级为纯欧氏，接口不变 |
+| 记忆后端不可用 | 退回罐装记忆，`RecallMeta.degraded = true`，接口不变 |
 | Token Factory 延迟抖动 | 模型分层 + 流式渲染，首 token 体验优先 |
 | swarm 拓扑爆炸 | `SwarmSpec` 限制最大 session 数 / 每 agent 扇出 |

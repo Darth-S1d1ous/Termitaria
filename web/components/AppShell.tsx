@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import {
+  artifactURL,
   createProject,
   deleteProject,
   liveSocketURL,
@@ -13,24 +14,27 @@ import {
   type SwarmSpecDoc,
 } from "../lib/api";
 import { AnimalIcon, markFor } from "../lib/animals";
-import { colorFor, formatTime, initials, preview, statusLine } from "../lib/format";
+import { colorFor, fileTitle, formatBytes, formatTime, initials, preview, statusLine } from "../lib/format";
 import { MessageBody } from "../lib/markdown";
 import { deleteSeeds, loadSeeds, saveSeeds, type Seed } from "../lib/seeds";
-import type { Chat, ChatMessage, MeshEdge, Project, ProjectStep, View } from "../lib/types";
+import type { Chat, ChatMessage, MeshEdge, Project, ProjectArtifact, ProjectStep, View } from "../lib/types";
 import {
   BackIcon,
   BookmarkIcon,
-  ChatsIcon,
+  DeckFileIcon,
+  DownloadIcon,
   GraphIcon,
   LifecycleIcon,
   PinIcon,
   PlusIcon,
+  ReportFileIcon,
   SearchIcon,
   SendIcon,
   TrashIcon,
 } from "./icons";
 import { KnowledgeGraph } from "./KnowledgeGraph";
 import { NewProject } from "./NewProject";
+import { ProjectPaneSwitch, type ProjectPane } from "./ProjectPaneSwitch";
 import { SwarmView } from "./SwarmView";
 
 type LiveFrame = {
@@ -47,6 +51,7 @@ type LiveFrame = {
   message?: ChatMessage | string;
   client_msg_id?: string;
   steps?: ProjectStep[];
+  artifacts?: ProjectArtifact[];
 };
 
 const LIST_DEFAULT = 380;
@@ -63,7 +68,7 @@ export function AppShell() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [view, setView] = useState<View>("chats");
-  const [projectPane, setProjectPane] = useState<"chats" | "knowledge">("chats");
+  const [projectPane, setProjectPane] = useState<ProjectPane>("chats");
   const [chats, setChats] = useState<Chat[]>([]);
   const [chatId, setChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -214,10 +219,22 @@ export function AppShell() {
   }, [projectId, chatId]);
 
   useEffect(() => {
+    const current = projects.find((item) => item.id === projectId);
+    if (current?.seeds && current.seeds.length > 0) {
+      setSeeds(current.seeds);
+      return;
+    }
     setSeeds(projectId ? loadSeeds(projectId) : []);
-  }, [projectId]);
+  }, [projectId, projects]);
 
   onFrame.current = (frame) => {
+    if (frame.type === "artifact" && frame.artifacts && projectId) {
+      const artifacts = frame.artifacts;
+      setProjects((current) =>
+        current.map((item) => (item.id === projectId ? { ...item, artifacts } : item)),
+      );
+      return;
+    }
     if (frame.type === "plan" && frame.steps && projectId) {
       const steps = frame.steps;
       setProjects((current) =>
@@ -350,7 +367,7 @@ export function AppShell() {
     setSavingProject(true);
     setError("");
     try {
-      const created = await createProject(name, spec);
+      const created = await createProject(name, spec, nextSeeds);
       saveSeeds(created.id, nextSeeds);
       setSeeds(nextSeeds);
       setProjects((current) => [...current, created]);
@@ -420,7 +437,7 @@ export function AppShell() {
     }));
   }
 
-  const solo = view !== "chats" || !project || projectPane === "knowledge";
+  const solo = view !== "chats" || !project || projectPane !== "chats";
   const chatOpen = view === "chats" && project !== null && projectPane === "chats" && chatId !== null;
   const hasPlan = view === "chats" && Boolean(project?.steps?.length);
 
@@ -482,15 +499,17 @@ export function AppShell() {
       </aside>
 
       {hasPlan && project?.steps ? (
-        <ol className="plan" aria-label="Project progress">
-          {project.steps.map((step) => (
-            <li key={step.id} className={step.state}>
-              <i />
-              <span>{step.label}</span>
-              <em className="plan-full" role="tooltip">{step.label}</em>
-            </li>
-          ))}
-        </ol>
+        <div className="plan-wrap">
+          <ol className="plan" aria-label="Project progress">
+            {project.steps.map((step) => (
+              <li key={step.id} className={step.state}>
+                <i />
+                <span>{step.label}</span>
+                <em className="plan-full" role="tooltip">{step.label}</em>
+              </li>
+            ))}
+          </ol>
+        </div>
       ) : null}
 
       {view === "chats" && !project && !booting && (
@@ -529,14 +548,7 @@ export function AppShell() {
               </>
             )}
           </header>
-          <div className="pane-switch" role="tablist" aria-label="Project views">
-            <button type="button" role="tab" aria-selected onClick={() => setProjectPane("chats")}>
-              Chats
-            </button>
-            <button type="button" role="tab" aria-selected={false} onClick={() => setProjectPane("knowledge")}>
-              Knowledge
-            </button>
-          </div>
+          <ProjectPaneSwitch pane={projectPane} onChange={setProjectPane} />
           <label className="search">
             <SearchIcon />
             <input
@@ -608,7 +620,20 @@ export function AppShell() {
       )}
 
       {view === "chats" && project && projectPane === "knowledge" && (
-        <KnowledgeGraph key={projectId ?? "none"} agents={project.agents} onChats={() => setProjectPane("chats")} />
+        <KnowledgeGraph key={projectId ?? "none"} projectId={project.id} onPane={setProjectPane} />
+      )}
+
+      {view === "chats" && project && projectPane === "artifacts" && (
+        <section className="artifacts-pane" aria-label="Artifacts">
+          <header className="pane-header">
+            <div className="pane-title">
+              <h1>Artifacts</h1>
+              <p>Reports and decks from this project.</p>
+            </div>
+            <ProjectPaneSwitch pane={projectPane} onChange={setProjectPane} />
+          </header>
+          <ArtifactList project={project} />
+        </section>
       )}
 
       {view === "graph" && (
@@ -658,6 +683,48 @@ export function AppShell() {
           onCreate={onCreateProject}
         />
       )}
+    </div>
+  );
+}
+
+function ArtifactList({ project }: { project: Project }) {
+  const files = project.artifacts ?? [];
+  if (files.length === 0) {
+    return (
+      <div className="artifacts-body">
+        <div className="empty">
+          <strong>No artifacts</strong>
+          <p>Reports and decks from this project show up here.</p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="artifacts-body">
+      <div className="deliverables" aria-label="Artifacts">
+        {files.map((item) => {
+          const deck = item.kind === "deck";
+          const label = deck ? "Deck" : "Report";
+          const size = formatBytes(item.bytes);
+          return (
+            <a
+              key={item.name}
+              className={`file-card${deck ? " deck" : " report"}`}
+              href={artifactURL(project.id, item.name)}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={item.name}
+            >
+              {deck ? <DeckFileIcon /> : <ReportFileIcon />}
+              <span className="file-copy">
+                <strong>{fileTitle(item.name)}</strong>
+                <span>{size ? `${label} · ${size}` : label}</span>
+              </span>
+              <DownloadIcon className="file-dl" />
+            </a>
+          );
+        })}
+      </div>
     </div>
   );
 }

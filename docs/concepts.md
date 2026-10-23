@@ -22,7 +22,7 @@ Swarm ──1..n──► Session ──1..n──► Message
   │                                ▼
   │                              Task ──► TaskResult ──► MessageAppended
   │                                │
-  └── MemoryPolicy ◄── reads/writes ── Memory Service + Knowledge Graph
+  └── MemoryPolicy ◄── this agent's Memory Service · this project's Knowledge Graph
 ```
 
 ---
@@ -147,54 +147,86 @@ enqueued — model names come from configuration, never hardcoded in contracts.
 
 ---
 
-## 4. The Memory — what the colony retains
+## 4. The Memory — two stores, two services
 
-Two substrates, one API (`MemoryService` + `KnowledgeGraphService`).
+A project keeps two stores. They do not share records, and a recall on one
+store does not return rows from the other.
 
-### Knowledge Graph (shared, project-level)
+| Store | Scope | Service | What a read returns |
+| --- | --- | --- | --- |
+| Knowledge Graph | one graph per project | `KnowledgeGraphService` | nodes and edges of **this** project |
+| Agent Memory | one store per agent | `MemoryService` | items of **this** agent |
 
-A FalkorDB property graph that exists **independently of any chat stream**.
-**Nodes** are `DOCUMENT` (user uploads), `PAPER` (agent-discovered literature),
-`CLAIM` (extracted by the ingest pipeline), or `CONCEPT`. **Edges** are typed:
-`CITES`, `DERIVES_FROM`, `DEPENDS_ON`, `SUPPORTS`, `CONTRADICTS`. Knowledge
-compounds across sessions instead of evaporating in scrollback. Recall is by
-subgraph query around seed nodes.
+A project is one swarm. The graph is keyed by that project. Agent memory is
+keyed by `agent_id`. Agent A cannot read agent B's store. Neither store is a
+view of the other.
 
-### Agent Memory (per-agent, hierarchical)
+### Knowledge Graph (one graph per project)
 
-Each agent's own memory, organized on a **Poincaré ball** — hyperbolic space
-that natively embeds tree-like structure. `MemoryKind` runs from the center
-outward: `ROLE` (center) → `RULE` → `PRINCIPLE` → `EPISODE` (edge). A
-`MemoryItem` carries its `poincare_radius` (smaller = more abstract) and a
-`parent_id`, so clients can reassemble the memory tree (Memory Inspector).
+A FalkorDB property graph. It exists for the project, independently of any
+chat stream and independently of any agent. Every agent in the project may
+read it. Agents in another project may not.
+
+**Nodes** are `DOCUMENT` (a file a user uploaded), `PAPER` (literature an
+agent found), `CLAIM` (a statement the ingest pipeline extracted), or
+`CONCEPT`. **Edges** are `CITES`, `DERIVES_FROM`, `DEPENDS_ON`, `SUPPORTS`,
+`CONTRADICTS`. File details such as author, year, and abstract sit in the
+node's `props`. The file body stays in object storage (`content_ref`) and
+does not ride the bus.
+
+Reads are subgraph queries around seed nodes (`QuerySubgraph`). The only
+writer is the ingest pipeline. The worker does not write the graph during
+inference.
+
+### Agent Memory (one store per agent)
+
+`MemoryService` reads and writes a single agent's store. `MemoryKind` is
+`ROLE`, `RULE`, `PRINCIPLE`, or `EPISODE`. A `MemoryItem` carries the text,
+a recall `score`, and the session it came from.
+
+Postgres holds the items. Qdrant holds that agent's episode vectors. A
+recall names one `agent_id` and returns only that agent's items. It does
+not return another agent's items, and it does not return Knowledge Graph
+nodes.
+
+A `PRINCIPLE` is a promotion inside this same store. It is not a graph node.
 
 ### Episode
 
-The sediment of a finished session: a summary, salient spans, and links to the
-KG nodes it touched. Episodes are how conversations become durable knowledge;
-over time, frequently-confirmed episodes distill upward into `PRINCIPLE`s.
+The sediment of a finished session, written when the session closes. Each
+participant agent gets its own episode in its own store. The episode has a
+summary and salient spans. It may record the ids of project-graph nodes the
+session touched. Those ids are references. The episode text stays in the
+agent's store, and the nodes stay in the project graph.
 
-### Recall (hierarchy-aware)
+### Recall
 
-`recall(query, depth)` with a `RecallDepth` spectrum: `PRINCIPLES_ONLY`,
-`EPISODES_ONLY`, or `AUTO` (default, full hierarchy-aware). Two-stage ranking:
-**Qdrant generates Euclidean candidates; Poincaré distance does the final
-ranking.** Recall is synchronous with a latency budget (50–200 ms) and can
-degrade to pure Euclidean ranking without changing the interface
-(`RecallMeta.degraded`).
+`MemoryService.Recall` takes `agent_id`, `query`, and `depth`. `RecallDepth`
+is `PRINCIPLES_ONLY`, `EPISODES_ONLY`, or `AUTO` (default, no kind filter).
+The service then truncates to `top_k`. Recall is synchronous, with a latency
+budget of 50–200 ms. The Go dispatcher calls it before enqueue and puts the
+items on `TaskContext`. The worker reads that context and does not call
+`MemoryService` itself. When the backend is unavailable, the service returns
+canned items and sets `RecallMeta.degraded`.
 
-### Document & ingest pipeline
+`KnowledgeGraphService.QuerySubgraph` is a different call. The dispatcher
+collects seed node ids for **this project** and puts them on
+`TaskContext.graph_node_ids`. Those ids are not agent-memory items.
 
-A `Document` enters the pipeline: chunk → embed → LLM extracts claims and
-citations → write to KG. Ingest is asynchronous (2–10 s) and never blocks
-chat. Large bodies stay in object storage (`content_ref`) — they never ride
-the bus.
+### Document and the ingest pipeline
+
+A `Document` is published on `memory.write.document`. The Knowledge Graph
+ingest pipeline consumes it: chunk, embed, extract claims and citations,
+then upsert nodes and edges into **this project's** graph. Ingest is
+asynchronous (2–10 s) and does not block chat. The document is not written
+into any agent's memory.
 
 ### MemoryPolicy
 
-Per-swarm default, per-agent override: whether to `write_episodes`,
-`recall_top_k`, `recall_depth`, and `decay_half_life_days` — memories fade on
-a half-life unless reinforced.
+Per-swarm default, per-agent override, applied only to agent memory:
+`write_episodes`, `recall_top_k`, `recall_depth`, and
+`decay_half_life_days`. The policy does not merge the two stores and does
+not let one agent read another.
 
 ---
 
@@ -231,9 +263,9 @@ One machine-readable error contract across all planes: `code`
 
 1. A user's message is appended to a session (`MessageAppended` on `sessions.*`).
 2. The session actor advances the turn (`TurnAdvanced`) and sees agent B speaks next.
-3. The actor enqueues a `Task` with a pre-fetched `TaskContext` (window + recalled memory + KG seeds).
+3. Before enqueue, the dispatcher prefetches this agent's memory and this project's KG seeds into `TaskContext` (window + recalled items + `graph_node_ids`).
 4. A LangGraph worker consumes it, calls Nemotron via Token Factory, streams `TaskDelta`s to the UI.
 5. The worker returns a `TaskResult`; the session actor — the session's only writer — appends it as `MessageAppended`.
-6. Later, when the session closes, an `Episode` is distilled into agent memory and any new sources into the Knowledge Graph.
+6. When the session closes, each participant receives its own `Episode` in its own agent store. A new document or paper is a separate write: `memory.write.document` into this project's Knowledge Graph. The episode is not inserted as a graph node.
 
 The colony has spoken once — and remembered it.

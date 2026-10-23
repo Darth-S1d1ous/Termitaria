@@ -8,12 +8,20 @@ export type ProjectStep = {
   state: StepState;
 };
 
+export type ProjectArtifact = {
+  name: string;
+  kind: string;
+  bytes: number;
+};
+
 export type Project = {
   id: string;
   name: string;
   goal: string;
-  agents: { id: string; display_name: string; kind: string }[];
+  agents: { id: string; display_name: string; kind: string; skills?: string[] }[];
   steps?: ProjectStep[];
+  seeds?: { id: string; kind: "text" | "link" | "file" | "image"; title: string; body: string }[];
+  artifacts?: ProjectArtifact[];
 };
 
 export type Chat = {

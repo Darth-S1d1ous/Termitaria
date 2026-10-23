@@ -1,8 +1,7 @@
-"""用户每说一句，就给会话里的每个 agent 写一条情节。
+"""session 关闭时，给每个参与 agent 写一条情节。
 
-记忆服务自己订阅 sessions.*。助手的回复不写，避免把模型编造的话存成事实。
-会话关闭时不再把整段重发一遍。
-写入走 memory.write.episode，和网页请求不是同一条路，所以不挡住聊天。
+记忆服务自己订阅 sessions.*。情节是这段会话的逐句记录，只写入该 agent 自己的库。
+助手的话带上发言者，不写成没有出处的事实。会话开着的时候不写，所以不挡住聊天。
 """
 from __future__ import annotations
 
@@ -21,6 +20,7 @@ log = logging.getLogger(__name__)
 _STREAM = "SESSIONS"
 _DURABLE = "memory-distiller"
 _WRITE_EPISODE = "memory.write.episode"
+_MAX_LINES = 40
 
 
 class Distiller:
@@ -29,6 +29,8 @@ class Distiller:
         self._cfg = cfg
         # session_id → agent participants。启动时重放 Opened / Closed 重建。
         self._participants: dict[str, list[str]] = {}
+        # session_id → 本段会话的逐句记录。关闭时才发出。
+        self._lines: dict[str, list[str]] = {}
         # 已发出的 (session_id, agent_id)，测试断言口。
         self.fanned_out: list[tuple[str, str]] = []
 
@@ -53,16 +55,15 @@ class Distiller:
             log.exception("unparseable session event, ack to drop")
             await msg.ack()
             return
+        if ev.WhichOneof("event") == "closed":
+            await self._distill(ev, env.trace_id)
         self._apply_roster(ev)
         if ev.WhichOneof("event") == "message_appended":
-            message = ev.message_appended.message
-            text = _message_text(message)
-            if text and _is_user(message):
-                await self._write_line(ev, env.trace_id, text)
+            self._note(ev)
         await msg.ack()
 
     async def _recover_participants(self) -> None:
-        # 临时消费者从头读，不碰 memory-distiller 的游标，也不把旧用户消息再写一遍。
+        # 临时消费者从头读，不碰 memory-distiller 的游标，也不把旧会话再写一遍。
         sub = await self._js.pull_subscribe(
             "sessions.>",
             stream=_STREAM,
@@ -95,27 +96,46 @@ class Distiller:
             log.exception("unparseable session event during replay")
             return
         self._apply_roster(ev)
+        self._note(ev)
 
     def _apply_roster(self, ev: session_pb2.SessionEvent) -> None:
         kind = ev.WhichOneof("event")
         if kind == "opened":
             agents = [p.agent_id for p in ev.opened.session.participants if p.HasField("agent_id")]
             self._participants[ev.session_id] = agents
+            self._lines.setdefault(ev.session_id, [])
         elif kind == "closed":
             self._participants.pop(ev.session_id, None)
+            self._lines.pop(ev.session_id, None)
 
-    async def _write_line(self, ev: session_pb2.SessionEvent, trace_id: str, text: str) -> None:
+    def _note(self, ev: session_pb2.SessionEvent) -> None:
+        if ev.WhichOneof("event") != "message_appended":
+            return
+        if ev.session_id not in self._participants:
+            return
+        line = _line(ev.message_appended.message)
+        if not line:
+            return
+        bucket = self._lines.setdefault(ev.session_id, [])
+        if len(bucket) < _MAX_LINES:
+            bucket.append(line)
+
+    async def _distill(self, ev: session_pb2.SessionEvent, trace_id: str) -> None:
         agents = self._participants.get(ev.session_id, [])
+        lines = list(self._lines.get(ev.session_id, []))
+        summary = "\n".join(lines).strip()
+        if not summary:
+            return
         log.info(
-            "user line session=%s swarm=%s → write %d agents (trace=%s)",
-            ev.session_id, ev.swarm_id, len(agents), trace_id,
+            "session closed %s → episode for %d agents (trace=%s)",
+            ev.session_id, len(agents), trace_id,
         )
         for agent_id in agents:
             episode = memory_pb2.Episode(
                 agent_id=agent_id,
                 session_id=ev.session_id,
-                summary=text,
-                salient_spans=[text],
+                summary=summary,
+                salient_spans=lines[:12],
                 occurred_at_ms=envelope.now_ms(),
             )
             payload = envelope.pack(
@@ -134,9 +154,19 @@ class Distiller:
             log.info("wrote episode agent=%s session=%s", agent_id, ev.session_id)
 
 
-def _is_user(message: session_pb2.Message) -> bool:
+def _line(message: session_pb2.Message) -> str:
+    text = _message_text(message)
+    if not text:
+        return ""
     speaker = getattr(message, "from")
-    return speaker.WhichOneof("kind") == "user_id"
+    kind = speaker.WhichOneof("kind")
+    if kind == "user_id":
+        who = "user"
+    elif kind == "agent_id":
+        who = speaker.agent_id or "agent"
+    else:
+        who = "note"
+    return f"{who}: {text}"
 
 
 def _message_text(message: session_pb2.Message) -> str:

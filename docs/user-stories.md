@@ -122,18 +122,20 @@
 
 验收标准：
 - 上传后 2–10 s 内 KG 可查（异步，不阻塞聊天）。
-- 节点含文档与 claim，边含 cites/derives/depends。
+- 节点写入这个 project 的图，种类含 `DOCUMENT` 与 `CLAIM`，边含 cites / derives / depends。
+- 文档不进入任何一个 agent 的记忆库。
 - 对应 SRS：FR-C6、FR-P2、FR-P3。
 
 ### US-4.2 agent 发现的知识自动沉淀（Should）
 
 **As a** 终端用户，
-**I want** agent 在研究过程中找到的重要文献也进 KG，
-**So that** 知识跨 session、跨 swarm 复利积累。
+**I want** agent 在研究过程中找到的重要文献也进这个 project 的 KG，
+**So that** 知识在同一 project 里跨 session 积累，而不是留在某一个 agent 的记忆里。
 
 验收标准：
-- agent 经 `memory.*` 写入的节点与用户上传的同构可查。
-- 对应 SRS：FR-I6、FR-P1。
+- 文献经 `memory.write.document` 进 KG ingest，写入后的节点与用户上传的文档同构，可在该 project 的图上查到。
+- 这些节点不写入任何一个 agent 的记忆库。
+- 对应 SRS：FR-P2、FR-P3。
 
 ### US-4.3 查看知识图（Should）
 
@@ -156,8 +158,9 @@
 **So that** researcher 和 risk officer 真的行为不同，而不是同一个模型换个名字。
 
 验收标准：
-- `recall(context, top_k)` 在 50–200 ms 内返回相关 episode。
-- 召回流程：embed query → Qdrant 近邻检索 → （可选）LLM 重排。
+- `recall(agent_id, query, top_k)` 在 50–200 ms 内只返回这一个 agent 的 episode。
+- 结果里没有其他 agent 的条目，也没有 KG 节点。
+- 召回流程：embed query → 在该 agent 的 Qdrant 向量里做近邻检索 → （可选）LLM 重排。
 - 重排超时或不可用时直接返回向量检索结果，调用方无感知。
 - 对应 SRS：FR-P1、FR-P4、FR-P5、FR-P6。
 

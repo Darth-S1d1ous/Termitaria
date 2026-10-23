@@ -33,26 +33,26 @@ const BASE_NODES: GraphNode[] = [
   {
     id: "gn_paper",
     kind: "paper",
-    title: "Poincaré Embeddings",
-    content: "Nickel and Kiela, 2017. Embeds hierarchical data in hyperbolic space.",
+    title: "Retrieval Augmented Generation",
+    content: "Lewis et al., 2020. Answers should be grounded in retrieved passages.",
   },
   {
     id: "gn_claim",
     kind: "claim",
-    title: "Hyperbolic distance ranks abstract principles nearer the origin",
-    content: "Derived from the Poincaré embeddings paper and the project notes.",
+    title: "Retrieved passages should be cited in the answer",
+    content: "Derived from the retrieval paper and the project notes.",
   },
   {
     id: "gn_claim_contra",
     kind: "claim",
-    title: "Euclidean embeddings are sufficient for hierarchical memory",
-    content: "A competing claim. It contradicts the hyperbolic-distance claim.",
+    title: "The model can answer without opening the source",
+    content: "A competing claim. It contradicts the citation claim.",
   },
   {
     id: "gn_concept",
     kind: "concept",
-    title: "Poincaré ball",
-    content: "The geometry used to place broad principles near the center and specific episodes at the edge.",
+    title: "Citation",
+    content: "A link from a sentence back to the passage it came from.",
   },
 ];
 

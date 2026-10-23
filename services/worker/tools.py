@@ -12,8 +12,8 @@ import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
+import base64
 from dataclasses import dataclass
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Awaitable, Callable
 from urllib.error import HTTPError, URLError
@@ -21,13 +21,15 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .calls import Call, extract_tool_call
+from .deck import build_pptx
 from .mcp import MCPTool, call_mcp
 from .skills import Skill
 
 Runner = Callable[[dict], Awaitable[str]]
 
 _ALIASES = {
-    "ledger": "plan",
+    "ledger": "advance",
+    "plan": "advance",
     "save": "write_file",
     "search": "web_search",
     "fetch": "fetch_url",
@@ -62,10 +64,17 @@ class Toolbox:
         lines = [
             "When you need to look something up, delegate, or write a file, call the function you were given.",
             "If this request includes functions, use a function call. Do not put the call in the text the user sees.",
-            "When you have enough information, reply in plain English and do not call another function.",
+            "When you have enough information, answer the user and do not call another function.",
             "If this request has no functions and you still must use a tool, reply with JSON only, one object per line:",
             '{"tool":"tool_name","param":"value"}',
         ]
+        if "ask_user" in self.tools:
+            lines.append(
+                "While a step is active, call delegate, advance, write_report, write_deck, or ask_user. A plain reply does not finish the turn."
+            )
+            lines.append(
+                "ask_user needs known and question. write_report and write_deck must be stored before the last step can turn done."
+            )
         for tool in self.tools.values():
             lines.append(f"- {tool.name}: {tool.description}")
         return "\n".join(lines)
@@ -163,6 +172,22 @@ def mention_delegates(text: str, coworkers: list[dict]) -> list[Call]:
     return calls
 
 
+def materials_text(seeds: list | None) -> str:
+    lines = []
+    for seed in seeds or []:
+        if not isinstance(seed, dict):
+            continue
+        title = str(seed.get("title") or "").strip()
+        body = str(seed.get("body") or "").strip()
+        kind = str(seed.get("kind") or "text")
+        if not title and not body:
+            continue
+        lines.append(f"- ({kind}) {title}\n  {body}".rstrip())
+    if not lines:
+        return ""
+    return "Project materials (cite these as the project seed):\n" + "\n".join(lines)
+
+
 def make_toolbox(
     *,
     agent: dict,
@@ -171,20 +196,23 @@ def make_toolbox(
     skills: list[Skill],
     mcp_tools: list[MCPTool],
     gateway: str,
+    seeds: list | None = None,
 ) -> Toolbox:
     listed = [item for item in (agent.get("tools") or []) if item]
     names = set(listed)
     kind = agent.get("kind") or "WORKER"
     if not listed:
         if kind == "ORCHESTRATOR":
-            names.update(["delegate", "plan"])
+            names.update(["delegate", "advance"])
         else:
             names.update(["web_search", "fetch_url", "write_file"])
     if "web_search" in names:
         names.add("fetch_url")
         names.add("utc_time")
     if kind == "ORCHESTRATOR" or "delegate" in names or "ledger" in names:
-        names.update(["delegate", "plan"])
+        names.update(["delegate", "advance"])
+    if kind == "ORCHESTRATOR":
+        names.update(["ask_user", "write_report", "write_deck"])
     tools: list[Tool] = []
     if "web_search" in names:
         tools.append(Tool(
@@ -229,7 +257,7 @@ def make_toolbox(
                 "delegate",
                 "Give a task to a coworker. coworker is an id or display name, task is what to do, and context is material you already have. "
                 "The coworker finishes in their own session and the result comes back here.",
-                _delegate(gateway, project_id, agent.get("id") or ""),
+                _delegate(gateway, project_id, agent.get("id") or "", materials_text(seeds)),
                 {
                     "coworker": {"type": "string", "description": "coworker id or display name"},
                     "task": {"type": "string"},
@@ -238,13 +266,14 @@ def make_toolbox(
                 ["coworker", "task"],
             )
         )
-    if "plan" in names:
+    if "advance" in names:
         labels = ", ".join(step.get("label") or step.get("id") or "" for step in steps if step.get("label") or step.get("id"))
         hint = f"Current steps: {labels}. " if labels else "Use the step label as label. "
         tools.append(
             Tool(
-                "plan",
-                hint + "Arguments are label and state (pending, active, done, failed). Mark a step done when it is finished.",
+                "advance",
+                hint + "Arguments are label and state (pending, active, done, failed). "
+                "The gateway keeps the last step open until a report and a deck are stored.",
                 _plan(gateway, project_id),
                 {
                     "label": {"type": "string"},
@@ -253,8 +282,62 @@ def make_toolbox(
                 ["label", "state"],
             )
         )
+    if "ask_user" in names:
+        tools.append(
+            Tool(
+                "ask_user",
+                "Stop and ask the user. known is what you already have, with sources. question is one specific question.",
+                _ask_user,
+                {
+                    "known": {"type": "string"},
+                    "question": {"type": "string"},
+                },
+                ["known", "question"],
+            )
+        )
+    if "write_report" in names:
+        tools.append(
+            Tool(
+                "write_report",
+                "Store the trading brief on the project. Fill what_moved, why, watch, and sources. Each section needs a full sentence and a source.",
+                _write_report(gateway, project_id),
+                {
+                    "name": {"type": "string"},
+                    "title": {"type": "string"},
+                    "what_moved": {"type": "string"},
+                    "why": {"type": "string"},
+                    "watch": {"type": "string"},
+                    "sources": {"type": "string"},
+                },
+                ["what_moved", "why", "watch", "sources"],
+            )
+        )
+    if "write_deck" in names:
+        tools.append(
+            Tool(
+                "write_deck",
+                "Store a pptx on the project. slides is a list of {title, bullets}. At least 3 slides.",
+                _write_deck(gateway, project_id),
+                {
+                    "name": {"type": "string"},
+                    "title": {"type": "string"},
+                    "slides": {"type": "array"},
+                },
+                ["title", "slides"],
+            )
+        )
     if "kg_query" in names or "kg_write" in names or "kg" in names:
         tools.append(Tool("kg", "The knowledge graph is not connected.", _kg))
+    if any(skill.name == "filings" for skill in skills) or "edgar" in names:
+        tools.append(
+            Tool(
+                "edgar",
+                "Find a US company's latest 10-K, 10-Q, or 8-K on SEC EDGAR. company is a ticker or a legal name. Companies outside EDGAR are not here.",
+                _edgar,
+                {"company": {"type": "string", "description": "ticker or legal name"}},
+                ["company"],
+            )
+        )
     if skills:
         by_name = {skill.name: skill for skill in skills}
         tools.append(
@@ -277,11 +360,13 @@ def make_toolbox(
     return Toolbox(tools)
 
 
-def _delegate(gateway: str, project_id: str, agent_id: str) -> Runner:
+def _delegate(gateway: str, project_id: str, agent_id: str, materials: str) -> Runner:
     async def run(args: dict) -> str:
         coworker = str(args.get("coworker") or args.get("role") or "").strip()
         task = str(args.get("task") or "").strip()
         context = str(args.get("context") or "")
+        if materials and materials not in context:
+            context = (context + "\n\n" + materials).strip()
         if not coworker or not task:
             return "delegate requires coworker and task"
         status, body = await asyncio.to_thread(
@@ -307,7 +392,7 @@ def _plan(gateway: str, project_id: str) -> Runner:
         label = str(args.get("label") or args.get("step") or "").strip()
         state = str(args.get("state") or "done").strip()
         if not label:
-            return "plan requires label"
+            return "advance requires label"
         status, body = await asyncio.to_thread(
             _post_json,
             f"{gateway}/api/projects/{project_id}/steps",
@@ -315,8 +400,16 @@ def _plan(gateway: str, project_id: str) -> Runner:
             15,
         )
         if status != 200:
-            return f"plan was not updated (HTTP {status}): {body[:300]}"
-        return f"Step {label!r} is now {state}"
+            return f"advance was not applied (HTTP {status}): {body[:500]}"
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return f"Step {label!r} is now {state}"
+        summary = "; ".join(
+            f"{step.get('label') or step.get('id')} [{step.get('state')}]"
+            for step in data.get("steps") or []
+        )
+        return f"Step {label!r} is now {state}\nsteps: {summary}"
 
     return run
 
@@ -397,92 +490,56 @@ def _write_blocking(path: str, content: str) -> str:
     return f"Wrote {target} ({len(content)} characters)."
 
 
+def _search_key() -> str:
+    key = os.environ.get("SEARCH_API_KEY") or os.environ.get("BRAVE_API_KEY") or ""
+    if key:
+        return key
+    from .config import _secret
+
+    return _secret("brave-secrets", "SEARCH_API_KEY")
+
+
 def _search_blocking(query: str) -> str:
-    ddg = _duckduckgo(query)
-    if ddg and "no parsed results" not in ddg:
-        return ddg
-    bing = _bing(query)
-    if bing:
-        return bing
-    return ddg or "The search returned no results."
-
-
-def _duckduckgo(query: str) -> str:
-    url = "https://html.duckduckgo.com/html/?" + urlencode({"q": query})
+    key = _search_key()
+    if not key:
+        return "web_search failed: SEARCH_API_KEY is not set"
+    url = "https://api.search.brave.com/res/v1/web/search?" + urlencode({"q": query, "count": "5"})
+    req = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "X-Subscription-Token": key,
+            "User-Agent": "Termitaria/0.1",
+        },
+    )
     try:
-        html = _http_text(url, 20)
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
-        return f"DuckDuckGo search failed: {exc}"
-    hits = _pairs(html, "result__a", "result__snippet")
-    return _format_hits("DuckDuckGo", hits) if hits else "DuckDuckGo returned no parsed results."
-
-
-def _bing(query: str) -> str:
-    url = "https://www.bing.com/search?" + urlencode({"q": query})
+        with urlopen(req, timeout=20) as res:
+            status = res.status
+            raw = res.read(500_000)
+    except HTTPError as exc:
+        detail = exc.read(300).decode("utf-8", "replace")
+        return f"web_search failed: HTTP {exc.code} {detail}".strip()
+    except (URLError, TimeoutError, OSError) as exc:
+        return f"web_search failed: {exc}"
+    if status != 200:
+        return f"web_search failed: HTTP {status}"
     try:
-        html = _http_text(url, 20)
-    except (HTTPError, URLError, TimeoutError, OSError):
-        return ""
-    hits = _pairs(html, "b_title", "")
+        data = json.loads(raw.decode("utf-8", "replace"))
+    except json.JSONDecodeError:
+        return "web_search failed: Brave did not return JSON"
+    hits = []
+    for item in (data.get("web") or {}).get("results") or []:
+        title = str(item.get("title") or "").strip()
+        link = str(item.get("url") or "").strip()
+        snippet = str(item.get("description") or "").strip()
+        if title and link:
+            hits.append((title, link, snippet))
     if not hits:
-        return ""
-    return _format_hits("Bing", hits)
-
-
-def _format_hits(source: str, hits: list[tuple[str, str, str]]) -> str:
-    lines = [f"Source {source}, {len(hits)} hits. Open a page with fetch_url."]
+        return "web_search failed: Brave returned no results"
+    lines = [f"Source Brave, {len(hits[:5])} hits. Open a page with fetch_url."]
     for title, link, snippet in hits[:5]:
         lines.append(f"- {title}\n  {link}\n  {snippet}".rstrip())
     return "\n".join(lines)
-
-
-class _LinkGrabber(HTMLParser):
-    def __init__(self, title_class: str, snippet_class: str):
-        super().__init__()
-        self.title_class = title_class
-        self.snippet_class = snippet_class
-        self.hits: list[tuple[str, str, str]] = []
-        self._href = ""
-        self._capture = ""
-        self._buf: list[str] = []
-        self._pending: tuple[str, str] | None = None
-
-    def handle_starttag(self, tag, attrs):
-        attr = dict(attrs)
-        classes = attr.get("class", "")
-        if tag == "a" and self.title_class in classes.split():
-            self._href = attr.get("href", "")
-            self._capture = "title"
-            self._buf = []
-        elif self.snippet_class and self.snippet_class in classes.split():
-            self._capture = "snippet"
-            self._buf = []
-
-    def handle_data(self, data):
-        if self._capture:
-            self._buf.append(data)
-
-    def handle_endtag(self, tag):
-        if self._capture == "title" and tag == "a":
-            title = " ".join("".join(self._buf).split())
-            if title and self._href:
-                self._pending = (title, self._href)
-                if not self.snippet_class:
-                    self.hits.append((title, self._href, ""))
-                    self._pending = None
-            self._capture = ""
-        elif self._capture == "snippet" and tag in {"a", "td", "div", "span", "p"}:
-            snippet = " ".join("".join(self._buf).split())
-            if self._pending:
-                self.hits.append((self._pending[0], self._pending[1], snippet))
-                self._pending = None
-            self._capture = ""
-
-
-def _pairs(html: str, title_class: str, snippet_class: str) -> list[tuple[str, str, str]]:
-    parser = _LinkGrabber(title_class, snippet_class)
-    parser.feed(html)
-    return parser.hits
 
 
 def _fetch_blocking(url: str) -> str:
@@ -533,14 +590,15 @@ def _html_text(html: str) -> str:
     return "\n".join(line.strip() for line in html.splitlines() if line.strip())
 
 
-def _http_text(url: str, timeout: int) -> str:
-    return _fetch_head(url, timeout).decode("utf-8", "replace")
-
-
-def _fetch_head(url: str, timeout: int) -> bytes:
-    req = Request(url, headers={"User-Agent": "Termitaria/0.1"})
-    with urlopen(req, timeout=timeout) as res:
-        return res.read(500_000)
+async def _ask_user(args: dict) -> str:
+    known = str(args.get("known") or "").strip()
+    question = str(args.get("question") or "").strip()
+    if len(known) < 40 or len(question) < 20 or ("?" not in question and "？" not in question):
+        return (
+            "ask_user needs known (at least 40 characters of what you already have) "
+            "and question (a specific question with a question mark)."
+        )
+    return f"What I already have:\n{known}\n\nQuestion:\n{question}"
 
 
 def _post_json(url: str, payload: dict, timeout: int) -> tuple[int, str]:
@@ -571,3 +629,159 @@ def load_project(gateway: str, project_id: str) -> dict | None:
         if project.get("id") == project_id:
             return project
     return None
+
+
+def _write_report(gateway: str, project_id: str) -> Runner:
+    async def run(args: dict) -> str:
+        sections = {
+            "What moved": str(args.get("what_moved") or "").strip(),
+            "Why": str(args.get("why") or "").strip(),
+            "What to watch": str(args.get("watch") or "").strip(),
+            "Sources": str(args.get("sources") or "").strip(),
+        }
+        short = [name for name, text in sections.items() if len(text) < 40]
+        if short:
+            return "write_report needs a full sentence in: " + ", ".join(short)
+        title = str(args.get("title") or "Copper brief").strip() or "Copper brief"
+        body = f"# {title}\n\n" + "\n\n".join(f"## {name}\n\n{text}" for name, text in sections.items())
+        name = _artifact_name(str(args.get("name") or ""), ".md", "brief.md")
+        return await asyncio.to_thread(_store_artifact, gateway, project_id, name, "report", body.encode("utf-8"))
+
+    return run
+
+
+def _write_deck(gateway: str, project_id: str) -> Runner:
+    async def run(args: dict) -> str:
+        slides = _slides(args.get("slides"))
+        if isinstance(slides, str):
+            return slides
+        title = str(args.get("title") or "Brief").strip() or "Brief"
+        raw = build_pptx(title, slides)
+        name = _artifact_name(str(args.get("name") or ""), ".pptx", "brief.pptx")
+        return await asyncio.to_thread(_store_artifact, gateway, project_id, name, "deck", raw)
+
+    return run
+
+
+def _slides(raw) -> list[dict] | str:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return "write_deck slides must be a list of {title, bullets}"
+    if not isinstance(raw, list) or len(raw) < 3:
+        return "write_deck needs at least 3 slides"
+    slides = []
+    for item in raw:
+        if isinstance(item, str):
+            title, bullets = item[:80], [item]
+        elif isinstance(item, dict):
+            title = str(item.get("title") or "").strip()
+            bullets = item.get("bullets") or item.get("points") or []
+            if isinstance(bullets, str):
+                bullets = [bullets]
+            bullets = [str(bullet).strip() for bullet in bullets if str(bullet).strip()]
+        else:
+            return "write_deck slides must be a list of {title, bullets}"
+        if len(title) < 3 or not bullets:
+            return "write_deck each slide needs a title and one bullet"
+        slides.append({"title": title, "bullets": bullets})
+    return slides
+
+
+def _artifact_name(raw: str, suffix: str, fallback: str) -> str:
+    name = Path(raw).name if raw else fallback
+    if not name.endswith(suffix):
+        stem = Path(name).stem or Path(fallback).stem
+        name = stem + suffix
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}", name):
+        return fallback
+    return name
+
+
+def _store_artifact(gateway: str, project_id: str, name: str, kind: str, raw: bytes) -> str:
+    status, body = _post_json(
+        f"{gateway}/api/projects/{project_id}/artifacts",
+        {"name": name, "kind": kind, "content_base64": base64.standard_b64encode(raw).decode("ascii")},
+        30,
+    )
+    if status != 201:
+        return f"{kind} was not stored (HTTP {status}): {body[:300]}"
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        data = {}
+    url = data.get("url") or f"/api/projects/{project_id}/artifacts/{name}"
+    return f"Stored {kind} {data.get('name') or name} at {url}"
+
+
+async def _edgar(args: dict) -> str:
+    company = str(args.get("company") or args.get("name") or "").strip()
+    if not company:
+        return "edgar requires company"
+    return await asyncio.to_thread(_edgar_blocking, company)
+
+
+def _edgar_blocking(company: str) -> str:
+    headers = {"User-Agent": "Termitaria/0.1 (local research; research@termitaria.local)", "Accept": "application/json"}
+    try:
+        tickers = json.loads(_sec_bytes("https://www.sec.gov/files/company_tickers.json", headers).decode("utf-8", "replace"))
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        return f"edgar failed: {exc}"
+    match = _match_filer(tickers, company)
+    if match is None:
+        return f"edgar found no US filer named {company}. Use web_search for companies outside EDGAR."
+    cik, title, ticker = match
+    padded = f"{cik:010d}"
+    try:
+        submissions = json.loads(_sec_bytes(f"https://data.sec.gov/submissions/CIK{padded}.json", headers).decode("utf-8", "replace"))
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        return f"edgar failed: {exc}"
+    recent = (submissions.get("filings") or {}).get("recent") or {}
+    forms = recent.get("form") or []
+    dates = recent.get("filingDate") or []
+    accessions = recent.get("accessionNumber") or []
+    docs = recent.get("primaryDocument") or []
+    wanted = {"10-K", "10-Q", "8-K", "20-F", "6-K"}
+    lines = [f"{title} ({ticker or 'no ticker'}) CIK {padded}. Open a filing with fetch_url."]
+    kept = 0
+    for index, form in enumerate(forms):
+        if form not in wanted or index >= len(accessions) or index >= len(docs):
+            continue
+        accession = str(accessions[index])
+        doc = str(docs[index])
+        filed = dates[index] if index < len(dates) else ""
+        url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession.replace('-', '')}/{doc}"
+        lines.append(f"- {form} filed {filed}\n  {url}")
+        kept += 1
+        if kept == 3:
+            break
+    if kept == 0:
+        return f"edgar found {title} but no recent 10-K, 10-Q, or 8-K."
+    return "\n".join(lines)
+
+
+def _match_filer(tickers, company: str) -> tuple[int, str, str] | None:
+    folded = company.casefold()
+    rows = tickers.values() if isinstance(tickers, dict) else tickers
+    fuzzy = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ticker = str(row.get("ticker") or "")
+        title = str(row.get("title") or "")
+        try:
+            cik = int(row.get("cik_str"))
+        except (TypeError, ValueError):
+            continue
+        if ticker.casefold() == folded:
+            return cik, title, ticker
+        if len(folded) >= 4 and folded in title.casefold() and fuzzy is None:
+            fuzzy = (cik, title, ticker)
+    return fuzzy
+
+
+def _sec_bytes(url: str, headers: dict) -> bytes:
+    req = Request(url, headers=headers)
+    with urlopen(req, timeout=20) as res:
+        return res.read(2_000_000)

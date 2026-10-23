@@ -21,6 +21,31 @@ export function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) {
+    const kb = bytes / 1024;
+    return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`;
+  }
+  const mb = bytes / (1024 * 1024);
+  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+}
+
+export function fileTitle(name: string): string {
+  const stem = name.replace(/\.[^.]+$/, "");
+  const words = stem
+    .replace(/[-_]+/g, (match, offset) => {
+      const before = stem[offset - 1];
+      const after = stem[offset + match.length];
+      if (before && after && /\d/.test(before) && /\d/.test(after)) return "-";
+      return " ";
+    })
+    .trim();
+  if (!words) return name;
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 export function preview(chat: { last_message: string; last_role: string }): string {
   if (!chat.last_message) return "";
   return chat.last_role === "user" ? `You: ${chat.last_message}` : chat.last_message;

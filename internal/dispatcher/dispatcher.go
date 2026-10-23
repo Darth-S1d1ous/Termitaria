@@ -151,6 +151,7 @@ func (d *Dispatcher) Stop() {
 	if d.resSub != nil {
 		_ = d.resSub.Drain()
 	}
+	closeGraph()
 }
 
 // onSessionEvent：只有 MessageAppended 是触发源（contracts §4：worker = 消息/turn 驱动）。
@@ -209,6 +210,7 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 		log.Printf("memory.recall agent=%s: %v（保持角色条目）", agentID, err)
 		recalled = nil
 	}
+	nodeIDs, knowledge := d.projectKnowledge(ctx, ev.GetSwarmId(), snap.Window)
 	// 触发幂等：同一触发消息只入队一次。task id 由触发消息 id 派生——进程重启 /
 	// 事件重投后派生出同一个 id，worker 的 _seen 与 actor 的 client_msg_id 去重
 	// （"task:<task_id>"）共同兜底。
@@ -220,9 +222,10 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 	}
 	taskID := "t_" + strings.TrimPrefix(triggerID, "m_")
 	context := &taskv1.TaskContext{
-		Window: snap.Window,
-		// graph_node_ids 留空：MemoryService 未接，契约已预留（contracts §4 自包含）。
-		Recalled: mergeRecalled(agentID, cfg.RolePrompt, recalled),
+		Window:       snap.Window,
+		Recalled:     mergeRecalled(agentID, cfg.RolePrompt, recalled),
+		GraphNodeIds: nodeIDs,
+		Knowledge:    knowledge,
 	}
 	task := &taskv1.Task{
 		TaskId:           taskID,

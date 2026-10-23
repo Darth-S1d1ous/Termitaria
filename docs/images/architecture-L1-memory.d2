@@ -13,31 +13,36 @@ title: "Termitaria L1 — Project Memory (Python intelligence plane)" {
   style.font-size: 22
 }
 
-mesh: "Agent Mesh" {shape: rectangle; style.stroke-dash: 4}
+mesh: "Agent Mesh\ndispatcher prefetches before enqueue" {shape: rectangle; style.stroke-dash: 4}
 
-gw: "Memory Service (Python · FastAPI/gRPC)" {
+mem: "Memory Service\none agent only" {
   style.border-radius: 8
-  rec: "Recall API\nhierarchical query"
-  wr: "Write API\nepisode · document"
+  rec: "Recall\nfilter by kind · top_k"
+  wr: "Write episode\nthis agent only"
   pol: "Policy\nwhat persists · decay"
 }
 
-kg: "Knowledge Graph" {
+kgs: "Knowledge Graph Service\none project only" {
   style.border-radius: 8
-  store: "FalkorDB\nproperty graph"
-  ingest: "Ingest pipeline\nchunk → embed → link"
-  nodes: "nodes: docs · papers · claims"
-  edges: "edges: cites · derives · depends"
+  query: "Query subgraph"
+  upsert: "Upsert node / edge"
 }
 
-am: "Agent Memory" {
+kg: "Knowledge Graph\none graph per project" {
   style.border-radius: 8
-  pg: "Postgres\nrole · rules · episodes"
-  hyp: "Poincaré Embedding svc\nPyTorch / geoopt"
-  tree: "hierarchical memory\nprinciples → episodes"
+  store: "FalkorDB"
+  ingest: "Ingest pipeline\nchunk → embed → extract"
+  nodes: "DOCUMENT · PAPER · CLAIM · CONCEPT"
+  edges: "cites · derives · depends · supports · contradicts"
 }
 
-vec: "Vector index (Qdrant)\nfast candidate recall" {
+am: "Agent Memory\none store per agent" {
+  style.border-radius: 8
+  pg: "Postgres\nrole · rules · principle · episode"
+  recall: "this agent's items only"
+}
+
+vec: "Qdrant\nthis agent's episode vectors" {
   style.border-radius: 8
 }
 
@@ -45,25 +50,25 @@ llm: "Nebius Token Factory\nNemotron (summarize / extract)" {
   shape: cloud
 }
 
-mesh <-> gw.rec: "recall(context)"
-mesh <-> gw.wr: "write(result)"
+mesh -> mem.rec: "recall(agent_id)"
+mesh -> kgs.query: "query this project's subgraph"
+mesh -> kg.ingest: "memory.write.document"
 
-gw.wr -> kg.ingest: "new document / paper"
-kg.ingest -> kg.store: "upsert nodes + edges"
+kg.ingest -> kgs.upsert: "nodes + edges"
 kg.ingest -> llm: "extract claims / citations"
-gw.rec -> kg.store: "subgraph query"
+kgs.upsert -> kg.store
+kgs.query -> kg.store
 
-gw.wr -> am.pg: "episode"
-gw.rec -> am.tree: "level-aware recall"
-am.tree <-> am.hyp: "embed / nearest-in-ball"
-am.hyp -> vec: "candidate fetch"
-am.pg <- gw.pol: "role / rules"
+mem.wr -> am.pg: "this agent's episode"
+mem.rec -> am.recall
+am.recall -> vec: "vector search"
+am.pg <- mem.pol: "role / rules"
 
 note: |md
-  **Two substrates, one API**
-  - KG = shared, compounding, cross-agent
-  - Agent memory = per-agent, hierarchical (Poincaré ball)
-  - Euclidean vector index is a *candidate generator*, not the memory model
+  **Two stores, two services. No shared records.**
+  - Knowledge Graph = one FalkorDB graph per project
+  - Agent memory = one store per agent
+  - A recall on one store does not return rows from the other
 | {
   near: bottom-center
   shape: text

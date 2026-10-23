@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import socket
+from urllib.parse import urlparse
 
 from termitaria.memory.v1 import memory_pb2
 
@@ -32,6 +33,11 @@ class CannedBackend:
         return req.document.doc_id
 
 
+def _postgres_endpoint(dsn: str) -> tuple[str, int]:
+    parsed = urlparse(dsn)
+    return parsed.hostname or "localhost", parsed.port or 5432
+
+
 def _port_open(host: str, port: int) -> bool:
     try:
         with socket.create_connection((host, port), timeout=0.5):
@@ -44,6 +50,27 @@ async def build_backend(cfg: MemoryConfig):
     if cfg.backend == "canned":
         log.info("memory backend: canned")
         return CannedBackend()
+    if cfg.backend == "agent":
+        pg_host, pg_port = _postgres_endpoint(cfg.postgres_dsn)
+        if not _port_open(cfg.qdrant_host, cfg.qdrant_port) or not _port_open(pg_host, pg_port):
+            log.error(
+                "agent memory needs qdrant %s:%s and postgres %s:%s, serving canned",
+                cfg.qdrant_host,
+                cfg.qdrant_port,
+                pg_host,
+                pg_port,
+            )
+            return CannedBackend(degraded=True)
+        try:
+            from .agent_backend import AgentBackend
+
+            backend = AgentBackend(cfg)
+            backend.open()
+        except Exception:
+            log.exception("agent memory init failed, serving canned")
+            return CannedBackend(degraded=True)
+        log.info("memory backend: agent collection prefix=%s", cfg.qdrant_collection)
+        return backend
     if cfg.backend not in {"mem0", "graphiti"}:
         log.error("unknown MEMORY_BACKEND=%s, serving canned", cfg.backend)
         return CannedBackend(degraded=True)

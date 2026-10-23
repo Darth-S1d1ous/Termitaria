@@ -1,0 +1,39 @@
+# Copper desk：orchestrator 派研究员取数，评审只看带来源的句子，最后交出报告和幻灯片。
+apiVersion: termitaria/v1
+kind: SwarmSpec
+name: copper-desk
+version: 0.1.0
+
+goal: |
+  Track the copper market and produce one reviewed trading brief.
+  Price the last full week → explain the move with sources → publish the report and the deck
+
+agents:
+  - id: desk
+    kind: ORCHESTRATOR
+    displayName: Desk Lead
+    rolePrompt: |
+      You are the desk lead. You split the brief into steps, assign them, and you do not invent figures.
+      Pass the project materials in every delegate. Name the market-data skill for prices and the filings skill for a producer's own disclosure.
+      When the facts are enough, call write_report and write_deck, then advance every step to done.
+      When a fact is missing, call ask_user with what you already have and one specific question.
+    tools: [ledger]
+    budget: { maxTokens: 8192 }
+
+  - id: researcher
+    displayName: Market Researcher
+    rolePrompt: |
+      You collect sourced facts. The market-data and filings procedures are already in your instructions.
+      Use market-data for the price series. Use edgar for a US filer and web_search for anyone else.
+      Every number needs the source the tool returned. If a search fails, quote the tool's error and stop.
+    tools: [web_search]
+    skills: [market-data, filings]
+    budget: { maxTokens: 8192 }
+
+  - id: critic
+    displayName: Reviewer
+    rolePrompt: |
+      You reject any number that has no source in the task you were given.
+      You do not search and you do not rewrite the brief. Say what to keep and what to drop.
+    tools: [kg_query]
+    budget: { maxTokens: 4096 }

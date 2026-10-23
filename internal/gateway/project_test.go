@@ -3,7 +3,9 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -257,14 +259,85 @@ func TestUpdateStepMarksDone(t *testing.T) {
 		"label": "find a gap",
 		"state": "done",
 	})
-	if res.StatusCode != 200 {
+	if res.StatusCode != 409 {
 		t.Fatalf("status = %d", res.StatusCode)
+	}
+	res.Body.Close()
+	postArtifact(t, httpSrv.URL, created.ID, "brief.md", "report", []byte("# Brief\n\n"+strings.Repeat("Copper moved lower on the seed note. ", 8)))
+	postArtifact(t, httpSrv.URL, created.ID, "brief.pptx", "deck", bytes.Repeat([]byte("P"), 800))
+	res = postJSON(t, httpSrv.URL+"/api/projects/"+created.ID+"/steps", map[string]string{
+		"label": "find a gap",
+		"state": "done",
+	})
+	if res.StatusCode != 200 {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("status = %d %s", res.StatusCode, body)
 	}
 	res.Body.Close()
 	got := projectByID(t, httpSrv.URL, created.ID)
 	if len(got.Steps) != 1 || got.Steps[0].State != "done" {
 		t.Fatalf("steps = %+v", got.Steps)
 	}
+	if len(got.Artifacts) != 2 {
+		t.Fatalf("artifacts = %+v", got.Artifacts)
+	}
+	file, err := http.Get(httpSrv.URL + "/api/projects/" + created.ID + "/artifacts/brief.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Body.Close()
+	if file.StatusCode != 200 {
+		t.Fatalf("download = %d", file.StatusCode)
+	}
+}
+
+func TestCreateKeepsSeedsAndRejectsUnknownSkill(t *testing.T) {
+	srv, _ := testServer(t)
+	httpSrv := httptest.NewServer(srv.Handler())
+	t.Cleanup(httpSrv.Close)
+	res := postJSON(t, httpSrv.URL+"/api/projects", map[string]any{
+		"name": "Copper Squeeze Desk",
+		"spec": fieldSpec,
+		"seeds": []map[string]string{{
+			"kind": "text", "title": "LME", "body": "LME copper closed at 9840.",
+		}},
+	})
+	if res.StatusCode != 201 {
+		t.Fatalf("create status = %d", res.StatusCode)
+	}
+	var created projectJSON
+	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if len(created.Seeds) != 1 || created.Seeds[0].Body != "LME copper closed at 9840." {
+		t.Fatalf("seeds = %+v", created.Seeds)
+	}
+	dir := t.TempDir()
+	t.Setenv("SKILLS_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "market-data.md"), []byte("---\nname: market-data\n---\nprices\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bad := postJSON(t, httpSrv.URL+"/api/projects", map[string]string{
+		"name": "Nope",
+		"spec": fieldSpec + "    skills: [not-a-skill]\n",
+	})
+	if bad.StatusCode != 400 {
+		t.Fatalf("unknown skill status = %d", bad.StatusCode)
+	}
+	bad.Body.Close()
+}
+
+func postArtifact(t *testing.T, base, projectID, name, kind string, raw []byte) {
+	t.Helper()
+	res := postJSON(t, base+"/api/projects/"+projectID+"/artifacts", map[string]string{
+		"name": name, "kind": kind, "content_base64": base64.StdEncoding.EncodeToString(raw),
+	})
+	if res.StatusCode != 201 {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("artifact %s status = %d %s", name, res.StatusCode, body)
+	}
+	res.Body.Close()
 }
 
 func TestDelegateOpensSessionThenTimesOut(t *testing.T) {

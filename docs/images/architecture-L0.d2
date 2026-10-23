@@ -23,15 +23,14 @@ Mesh: Agent Mesh Layer {
 }
 
 Memory: Project Memory Layer {
-  am: Agent Memory\nrole / rules / Poincare hierarchy
-  kg: Knowledge Graph\ndocs & papers as nodes
+  am: Agent Memory\none store per agent\nrole / rules / episodes
+  kg: Knowledge Graph\none graph per project\nDOCUMENT · PAPER · CLAIM · CONCEPT
 }
 
 Config: Custom Config
 
 User <-> Client.ui: chat
 Client.ui <-> Mesh: messages\n(every agent)
-Mesh <-> Memory.am: read / write\n(every agent)
-Mesh <-> Memory.kg: read / write\n(every agent)
-Memory.am <-> Memory.kg
+Mesh <-> Memory.am: each agent reads and writes\nonly its own store
+Mesh <-> Memory.kg: agents in this project read\nthe one graph; documents enter through ingest
 Config -> Mesh: define swarm

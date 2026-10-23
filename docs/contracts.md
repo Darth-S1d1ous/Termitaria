@@ -14,8 +14,8 @@
 | --- | --- | --- | --- | --- |
 | `Session` / `SessionEvent` | [session.proto](../proto/termitaria/session/v1/session.proto) | JetStream `sessions.*` | Agent Runtime (Go) | Gateway、Memory、UI |
 | `SwarmSpec` | [swarm.proto](../proto/termitaria/swarm/v1/swarm.proto) + [JSON Schema](../schemas/swarmspec.schema.json) | YAML 配置 → proto | 用户 | Swarm Scheduler (Go) |
-| `MemoryService` | [memory.proto](../proto/termitaria/memory/v1/memory.proto) | `memory.*`（request-reply + JetStream） | Memory 服务 (Py) | Py worker、Go runtime、UI（只读） |
-| `KnowledgeGraphService` | [graph.proto](../proto/termitaria/graph/v1/graph.proto) | RPC | KG 服务 (Py) | Py worker、ingest、UI（只读） |
+| `MemoryService` | [memory.proto](../proto/termitaria/memory/v1/memory.proto) | `memory.recall` + `memory.write.episode` | Memory 服务 (Py) | Go dispatcher（预取这一个 agent）、UI（只读这一个 agent） |
+| `KnowledgeGraphService` | [graph.proto](../proto/termitaria/graph/v1/graph.proto) | RPC | KG 服务 (Py) | Go dispatcher（预取这一个 project 的子图）、KG ingest、UI（只读） |
 | `Task` / `TaskDelta` / `TaskResult` | [task.proto](../proto/termitaria/task/v1/task.proto) | JetStream `tasks.*` + core NATS | Agent Runtime (Go) | Py worker / Policy、Gateway |
 | `Ledger` / `LedgerEvent` | [project.proto](../proto/termitaria/project/v1/project.proto) | JetStream `ledger.*` | 项目骨架 (Go) | dispatcher、UI |
 | `SwarmService` / `SessionService` | swarm.proto / session.proto | Connect-RPC / REST | Swarm API (Go) | Client、CLI |
@@ -47,9 +47,9 @@
 | `tasks.<swarm>.delta.<task>` | `TaskDelta` | core NATS（不持久化） | worker → Policy → Gateway → UI |
 | `tasks.<swarm>.result.<task>` | `TaskResult` | core NATS | worker → session actor |
 | `ledger.<swarm>.events` | `LedgerEvent` | JetStream（可重放） | 项目骨架 (Go) → dispatcher、UI |
-| `memory.recall` | `RecallRequest/Response` | request-reply | worker / runtime → Memory 服务 |
-| `memory.write.episode` | `WriteEpisodeRequest` | JetStream | session actor / worker → Memory 服务 |
-| `memory.write.document` | `WriteDocumentRequest` | JetStream | 用户 / agent → ingest pipeline → KG |
+| `memory.recall` | `RecallRequest/Response` | request-reply | Go dispatcher → Memory 服务。请求带一个 `agent_id`，只返回该 agent 的条目 |
+| `memory.write.episode` | `WriteEpisodeRequest` | JetStream | distiller（session 关闭）→ Memory 服务。每个参与 agent 各一条，只写入该 agent |
+| `memory.write.document` | `WriteDocumentRequest` | JetStream | 用户 / agent → KG ingest → 该 project 的图。不写入 agent 记忆 |
 
 设计取舍：
 
@@ -87,15 +87,20 @@
 
 ### 3.3 Memory（memory/v1）
 
-- `Recall`：Qdrant 欧氏候选 → Poincaré 距离精排。`RecallMeta.degraded = true` 表示降级为纯欧氏——**接口不变**（架构 §9 风险对策）。
-- `MemoryItem.poincare_radius`（‖x‖）是层级深度的代理：越小越靠球心越抽象；配合 `parent_id`，客户端可重组记忆树（Memory Inspector）。
-- 写入：`WriteEpisode`（session 结束沉淀）/ `WriteDocument`（进 ingest pipeline，异步，返回 `ingest_task_id`）。
+Memory Service 只读写一个 agent 的记忆。它不读、不写 Knowledge Graph，也不读其他 agent 的库。
+
+- `Recall` 必须带 `agent_id`。按 `RecallDepth` 过滤种类，再用 `top_k` 截断。返回的 `MemoryItem` 全部属于这一个 agent。`RecallMeta.degraded = true` 表示后端不可用，退回罐装记忆。
+- `WriteEpisode` 在 session 关闭时触发。每个参与 agent 在自己的库里各写一条。一条 episode 可以记下它碰过的 `graph_node_ids`，这些 id 只是指向 project 图的引用，正文仍留在该 agent 的库里。
+- `WriteDocument` 的消息类型定义在本包，发到 `memory.write.document`。消费方是 KG ingest（§3.4），不是 Memory Service 的存储。
 
 ### 3.4 Graph（graph/v1）
 
-- 节点 = 文档 / 论文 / 主张 / 概念；边 = 引用 / 推导 / 依赖 / 支持 / 反驳。
-- `QuerySubgraph`（种子节点 + 跳数 + 边类型过滤）同时服务 worker 的上下文增强与 UI 的 KG 预览。
-- 属性图：`props` 是开放的 `google.protobuf.Struct`，节点/边的领域属性不进冻结契约。
+Knowledge Graph Service 只读写一个 project 的图。一个 project 就是一个 swarm，对应一张 FalkorDB 图。图不按 agent 切开。agent 记忆里的 episode 不会变成这张图上的节点。
+
+- 节点 = `DOCUMENT` / `PAPER` / `CLAIM` / `CONCEPT`。边 = 引用 / 推导 / 依赖 / 支持 / 反驳。
+- 唯一写路径是 ingest：消费 `memory.write.document`，chunk → embed → 抽 claim / citation → upsert。worker 推理期间不写图。
+- `QuerySubgraph`（种子节点 + 跳数 + 边类型过滤）只在这张 project 图上查。dispatcher 在入队前把种子放进 `TaskContext.graph_node_ids`。同一接口也给 UI 做只读预览。
+- 属性图：`props` 是开放的 `google.protobuf.Struct`（作者、年份、摘要等）。节点/边的领域属性不进冻结契约。正文走 `content_ref`，不进总线。
 
 ---
 
@@ -103,7 +108,7 @@
 
 一次推理工作项 = 自包含上下文 + 预算 + 回调 subject。
 
-- **自包含**：worker 无状态，`TaskContext` 必须带齐 会话窗口 + 预取记忆 + 相关 KG 节点 id；orchestrator 任务另带 `ledger` 台账快照（dispatch 前由 Go 侧预取，与 memory recall 同原则）。
+- **自包含**：worker 无状态，也不在推理中访问两个记忆服务。`TaskContext` 必须带齐会话窗口 + 这一个 agent 的预取记忆 + 这一个 project 的 KG 节点 id。`knowledge` 是同一份子图的可读文本，只含这个 project 的节点。orchestrator 任务另带 `ledger` 台账快照。这些都由 Go 在 dispatch 前预取。
 - **预算**：`Budget{max_tokens, max_cost_usd, deadline_ms}`，耗尽即 `TASK_STATUS_CANCELLED`。
 - **双通道回写**：流式 `TaskDelta`（带 `seq` 可重排）走 delta subject；最终 `TaskResult` 走 result subject 给 session actor。
 - `TaskUsage` 记录实际模型与 token 用量——demo 时展示模型分层与成本（架构 §7）。
@@ -173,10 +178,11 @@ Client 是 TypeScript，WS 上用 JSON 信封（不套 proto）。`type` 字段�
 | 1. Scheduler 拉起 A、B | `SwarmSpec` | YAML → proto |
 | 2. A 向 B 开 session | `SessionService.OpenSession` → `SessionOpened` | Connect-RPC → `sessions.*` |
 | 3. A 产生推理任务 | `Task` | `tasks.<swarm>.<agent>` |
-| 4. worker 取记忆 / KG | `MemoryService.Recall` · `KnowledgeGraphService.QuerySubgraph` | `memory.recall` · RPC |
+| 4. dispatcher 预取这一个 agent 的记忆，以及这一个 project 的子图 | `MemoryService.Recall` · `KnowledgeGraphService.QuerySubgraph` | `memory.recall` · RPC |
 | 5. delta 渲染 | `TaskDelta` → `message.delta` | `tasks.*.delta.*` → WS |
 | 5b. 消息落流 | `TaskResult` → `MessageAppended` | result subject → `sessions.*` |
-| 6. 沉淀 | `WriteEpisode` / `WriteDocument` | `memory.write.*` → ingest → KG |
+| 6a. session 关闭，每个参与 agent 各写一条 episode | `WriteEpisode` | `memory.write.episode` → 该 agent 的记忆 |
+| 6b. 新文档或文献入库 | `WriteDocument` | `memory.write.document` → KG ingest → 该 project 的图 |
 
 ---
 

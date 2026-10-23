@@ -30,7 +30,13 @@ if lsof -nP -iTCP:3000 -sTCP:LISTEN >/dev/null 2>&1; then
   exit 1
 fi
 
-docker compose up -d nats
+if lsof -nP -iTCP:4222 -sTCP:LISTEN >/dev/null 2>&1; then
+  docker compose up -d qdrant falkordb postgres
+else
+  docker compose up -d nats qdrant falkordb postgres
+fi
+export MEMORY_BACKEND="${MEMORY_BACKEND:-agent}"
+export GRAPH_CANNED="${GRAPH_CANNED:-0}"
 
 for _ in $(seq 1 30); do
   if curl -sf http://127.0.0.1:8222/healthz >/dev/null; then

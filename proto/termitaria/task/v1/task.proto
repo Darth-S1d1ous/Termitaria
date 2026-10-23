@@ -35,6 +35,8 @@ message TaskContext {
   repeated memory.v1.MemoryItem recalled = 2;
   repeated string graph_node_ids = 3;
   project.v1.LedgerSnapshot ledger = 4;  // orchestrator 任务专属，dispatch 前预取
+  // knowledge 是本 project 知识图的预取文本。它不是 agent 记忆，也不含其他 project 的节点。
+  string knowledge = 5;
 }
 
 enum TaskStatus {

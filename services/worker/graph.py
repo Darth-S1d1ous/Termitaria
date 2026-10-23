@@ -26,12 +26,12 @@ from .deepseek_dsml import recover_dsml
 from .mcp import load_mcp_tools
 from .model import Done, ModelPort
 from .rules import load_rules
-from .skills import catalog, load_skills
-from .tools import Toolbox, load_project, make_toolbox, mention_delegates, parse_tool_calls, visible_text
+from .skills import load_skills
+from .tools import Toolbox, load_project, make_toolbox, materials_text, mention_delegates, parse_tool_calls, visible_text
 
 EmitDelta = Callable[[task_pb2.TaskDelta], Awaitable[None]]
 
-# role / rules / principle 构成 system prompt（Poincaré 球心侧的上位记忆）
+# role / rules / principle 放进 system prompt。episode 单独记。
 _ROLE_KINDS = (
     memory_pb2.MEMORY_KIND_ROLE,
     memory_pb2.MEMORY_KIND_RULE,
@@ -41,16 +41,27 @@ _MAX_EPISODES = 5
 
 # Memory 召回未接时的 demo 角色。召回结果优先于这里。
 _MAX_TOOL_ROUNDS = 6
+_MAX_ORCH_ROUNDS = 8
+_OPEN_NUDGE = (
+    "The project is still open. Call delegate, advance, write_report, write_deck, or ask_user. "
+    "A plain reply does not finish the turn."
+)
+_DATA_TOOLS = {"web_search", "fetch_url", "edgar", "utc_time"}
+_DATA_NUDGE = (
+    "You have not called a data tool. The skill text is already in your instructions. "
+    "Call utc_time, fetch_url, web_search, or edgar before you answer. "
+    "A gap is allowed only after a tool result says the source is missing."
+)
 _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 _FALLBACK_ROLES = {
     "ideator": (
         "You are the ideator. You propose and defend a research hypothesis. "
-        "When challenged, add evidence or narrow the claim. Reply in English, in two or three sentences."
+        "When challenged, add evidence or narrow the claim. Answer in two or three sentences."
     ),
     "reviewer": (
         "You are the reviewer. You review the hypothesis skeptically: find gaps, demand evidence, "
-        "and do not agree easily. Reply in English, in two or three sentences."
+        "and do not agree easily. Answer in two or three sentences."
     ),
 }
 
@@ -77,25 +88,42 @@ def build_graph(model: ModelPort, emit: EmitDelta):
         gateway = os.environ.get("GATEWAY_URL", "http://127.0.0.1:8787").rstrip("/")
         project = load_project(gateway, task.swarm_id)
         agent = _agent_of(project, task.agent_id)
-        skills = load_skills(root / "skills")
+        all_skills = load_skills(root / "skills")
         rules = load_rules(root / "rules")
         steps = (project or {}).get("steps") or []
-        roster = [
-            {"id": item.get("id") or "", "display_name": item.get("display_name") or "", "kind": item.get("kind") or ""}
-            for item in (project or {}).get("agents") or []
-            if item.get("id") and item.get("id") != task.agent_id
-        ]
+        own = {name for name in (agent.get("skills") or []) if name}
+        visible = set(own)
+        if (agent.get("kind") or "") == "ORCHESTRATOR":
+            for item in (project or {}).get("agents") or []:
+                visible.update(name for name in (item.get("skills") or []) if name)
+        catalog_skills = [skill for skill in all_skills if skill.name in visible]
+        loadable = [skill for skill in all_skills if skill.name in own]
+        roster = []
+        for item in (project or {}).get("agents") or []:
+            if not item.get("id") or item.get("id") == task.agent_id:
+                continue
+            roster.append({
+                "id": item.get("id") or "",
+                "display_name": item.get("display_name") or "",
+                "kind": item.get("kind") or "",
+                "skills": [name for name in (item.get("skills") or []) if name],
+            })
+        seeds = (project or {}).get("seeds") or []
         toolbox = make_toolbox(
             agent=agent,
             project_id=task.swarm_id,
             steps=steps,
-            skills=skills,
+            skills=loadable,
             mcp_tools=load_mcp_tools(root / "mcp.json"),
             gateway=gateway,
+            seeds=seeds,
         )
         held["tools"] = toolbox
         held["roster"] = roster
         held["kind"] = agent.get("kind") or ""
+        held["steps"] = steps
+        held["files"] = []
+        held["asked"] = False
         role_lines = [it.text for it in task.context.recalled if it.kind in _ROLE_KINDS]
         role = "\n".join(role_lines) or _FALLBACK_ROLES.get(task.agent_id) or (
             f"You are agent '{task.agent_id}' in a Termitaria swarm. "
@@ -104,7 +132,10 @@ def build_graph(model: ModelPort, emit: EmitDelta):
         facts = remembered_facts(task.context.recalled)
         if facts:
             role = f"{role}\n\n{facts}"
-        system = _system(role, rules, skills, toolbox, roster, steps)
+        knowledge = task.context.knowledge.strip()
+        if knowledge:
+            role = f"{role}\n\n{knowledge}"
+        system = _system(role, rules, catalog_skills, toolbox, roster, steps, materials_text(seeds))
         window = [(_sender(m), _first_text(m)) for m in task.context.window]
         return {"system": system, "window": window}
 
@@ -115,13 +146,18 @@ def build_graph(model: ModelPort, emit: EmitDelta):
         usage = None
         text = ""
         used_tools = False
+        used_data = False
         schemas = toolbox.schemas()
         declared = _declared_tools(schemas)
-        for round_index in range(_MAX_TOOL_ROUNDS):
+        orch = held.get("kind") == "ORCHESTRATOR"
+        limit = _MAX_ORCH_ROUNDS if orch else _MAX_TOOL_ROUNDS
+        for round_index in range(limit):
             if _deadline_exceeded(task.budget):
                 return _cancelled(state.get("seq", 0), usage)
-            # 最后一轮不再提供函数，逼模型用已经拿到的结果写答复。
-            offer = None if used_tools and round_index == _MAX_TOOL_ROUNDS - 1 else schemas
+            # 工人的最后一轮不再提供函数。负责人的函数要留到这一轮真正结束。
+            offer = schemas
+            if not orch and used_tools and round_index == limit - 1:
+                offer = None
             try:
                 text, calls, usage = await _complete(
                     model, state["system"], window, task, offer, declared
@@ -134,23 +170,52 @@ def build_graph(model: ModelPort, emit: EmitDelta):
                     "seq": state.get("seq", 0),
                     "usage": usage,
                 }
-            if not calls and round_index == 0 and held.get("kind") == "ORCHESTRATOR":
+            if not calls and round_index == 0 and orch:
                 # 模型如果还是只在正文里写 @，这里补一次真正的派活。
                 calls = mention_delegates(text, held.get("roster") or [])
+            if not calls and orch:
+                if _orch_can_stop(held):
+                    text = _with_files(text, held)
+                    break
+                if round_index == limit - 1:
+                    text = _forced_ask(held, window)
+                    break
+                window.append(("", text))
+                window.append(("tool", _OPEN_NUDGE))
+                continue
+            if (
+                not calls
+                and not orch
+                and not used_data
+                and declared & _DATA_TOOLS
+                and round_index < 3
+            ):
+                window.append(("", text))
+                window.append(("tool", _DATA_NUDGE))
+                continue
             if not calls:
                 text = text or "The reply was cut off before it had any text."
                 break
             used_tools = True
             notes: list[str] = []
+            asked = ""
             for call in calls:
                 args = dict(call.arguments)
                 if call.name in {"delegate", "ledger"} and notes:
                     prior = str(args.get("context") or "")
                     args["context"] = (prior + "\n\n" + "\n\n".join(notes)).strip()
                 result = await toolbox.run(call.name, args)
+                _remember_progress(held, call.name, result)
+                if call.name in _DATA_TOOLS:
+                    used_data = True
+                if call.name == "ask_user" and result.startswith("What I already have:"):
+                    asked = result
                 notes.append(f"{call.name} → {result}")
             window.append(("", text))
             window.append(("tool", "\n\n".join(notes)))
+            if asked:
+                text = asked
+                break
             if offer is None:
                 # 收尾轮不再提供函数，但模型仍可能把调用写在正文里。执行完再要一句给人看的话。
                 try:
@@ -178,7 +243,12 @@ def build_graph(model: ModelPort, emit: EmitDelta):
                 text = (follow or "").strip() or "\n\n".join(notes)
                 break
         else:
-            text = text or "Stopped after the tool results."
+            if orch and not _orch_can_stop(held):
+                text = _forced_ask(held, window)
+            elif orch:
+                text = _with_files("The brief is ready.", held)
+            else:
+                text = text or "Stopped after the tool results."
         seq = state.get("seq", 0)
         for piece in _split_chunks(text, 6):
             if not piece:
@@ -326,20 +396,39 @@ def remembered_facts(items, limit: int = _MAX_EPISODES) -> str:
     return "Remembered facts:\n" + "\n".join(f"- {line}" for line in lines)
 
 
-def _system(role: str, rules: str, skills, toolbox: Toolbox, roster: list[dict], steps: list) -> str:
+def _system(role: str, rules: str, skills, toolbox: Toolbox, roster: list[dict], steps: list, materials: str = "") -> str:
     parts = [role, _today()]
+    if materials:
+        parts.append(materials)
     if rules:
         parts.append("Rules:\n" + rules)
-    listed = catalog(skills)
-    if listed:
-        parts.append(listed)
+    loadable = set()
+    load_tool = toolbox.tools.get("load_skill") if toolbox else None
+    if load_tool is not None:
+        loadable = set((load_tool.parameters or {}).get("name", {}).get("enum") or [])
+    own = [skill for skill in skills if skill.name in loadable]
+    others = [skill for skill in skills if skill.name not in loadable]
+    if own:
+        lines = [
+            "These skills are bound to you. Follow them by calling the tools they name. Do not stop to ask for the skill text.",
+        ]
+        for skill in own:
+            lines.append(f"## {skill.name}\n{skill.description}\n\n{skill.body}")
+        parts.append("\n\n".join(lines))
+    if others:
+        lines = ["Coworker skills. Name one in the delegate task. Do not call load_skill for a skill that is not yours."]
+        for skill in others:
+            lines.append(f"- {skill.name}: {skill.description}")
+        parts.append("\n".join(lines))
     if roster:
         lines = ["Coworkers (delegate with coworker set to the id):"]
         for person in roster:
-            lines.append(f"- {person['id']}（{person['display_name']}）")
+            bound = person.get("skills") or []
+            extra = f" skills: {', '.join(bound)}" if bound else ""
+            lines.append(f"- {person['id']}（{person['display_name']}）{extra}")
         parts.append("\n".join(lines))
     if steps:
-        lines = ["Project progress. Call plan when a step is finished:"]
+        lines = ["Project progress. Call advance when a step is finished:"]
         for step in steps:
             lines.append(f"- {step.get('label') or step.get('id')} [{step.get('state')}]")
         parts.append("\n".join(lines))
@@ -347,6 +436,64 @@ def _system(role: str, rules: str, skills, toolbox: Toolbox, roster: list[dict],
     if guide:
         parts.append(guide)
     return "\n\n".join(part for part in parts if part)
+
+
+def _orch_can_stop(held: dict) -> bool:
+    if held.get("asked"):
+        return True
+    steps = held.get("steps") or []
+    return bool(steps) and all(step.get("state") == "done" for step in steps)
+
+
+def _remember_progress(held: dict, name: str, result: str) -> None:
+    if name in {"advance", "plan"}:
+        for line in result.splitlines():
+            if line.startswith("steps: "):
+                held["steps"] = _parse_steps(line[len("steps: "):])
+    if name in {"write_report", "write_deck"} and result.startswith("Stored "):
+        parts = result.split()
+        if len(parts) >= 3:
+            held.setdefault("files", []).append(parts[2])
+    if name == "ask_user" and result.startswith("What I already have:"):
+        held["asked"] = True
+
+
+def _parse_steps(raw: str) -> list[dict]:
+    steps = []
+    for part in raw.split(";"):
+        part = part.strip()
+        if part.endswith("]") and " [" in part:
+            label, state = part.rsplit(" [", 1)
+            steps.append({"label": label, "state": state[:-1]})
+    return steps
+
+
+def _with_files(text: str, held: dict) -> str:
+    missing = [name for name in held.get("files") or [] if name and name not in text]
+    if not missing:
+        return text
+    lines = "\n".join(f"- {name}" for name in missing)
+    return text.rstrip() + "\n\nFiles:\n" + lines
+
+
+def _forced_ask(held: dict, window: list[tuple[str, str]]) -> str:
+    notes = [
+        text for sender, text in window
+        if sender == "tool" and text and not text.startswith("The project is still open")
+    ]
+    known = notes[-1] if notes else "No tool result is in hand yet."
+    if len(known) > 1200:
+        known = known[:1200]
+    active = "the open step"
+    for step in held.get("steps") or []:
+        if step.get("state") == "active":
+            active = step.get("label") or active
+            break
+    return (
+        f"What I already have:\n{known}\n\n"
+        f"Question:\nThe step \"{active}\" is still open. "
+        "Which source should I open before I write the brief?"
+    )
 
 
 def _agent_of(project: dict | None, agent_id: str) -> dict:

@@ -1,6 +1,5 @@
-"""罐装记忆：让层级字段（poincare_radius / parent_id）在真内核落地前就可测。
+"""罐装记忆：后端不可用时的固定召回。
 
-同事接手时替换本文件的内核：Qdrant 欧氏候选 → Poincaré 距离精排（contracts §3.3）。
 接口保持不变——RecallResponse 的形状、degraded 降级语义都不变。
 """
 from __future__ import annotations
@@ -9,13 +8,11 @@ import time
 
 from termitaria.memory.v1 import memory_pb2
 
-# 罐装条目模板：(kind, radius, 文本)。radius 从球心到球缘递增（架构 §5.1）。
-# parent 链：ROLE ← RULE ← PRINCIPLE ← EPISODE，客户端可重组记忆树（Memory Inspector）。
 _CANNED = (
-    (memory_pb2.MEMORY_KIND_ROLE, 0.05, "You are a researcher in Termitaria swarm。"),
-    (memory_pb2.MEMORY_KIND_RULE, 0.30, "You must provide evidence for your reference. If you are unsure, state clearly you are unsure."),
-    (memory_pb2.MEMORY_KIND_PRINCIPLE, 0.55, "First validate the hypothesis, then expand the investment."),
-    (memory_pb2.MEMORY_KIND_EPISODE, 0.90, "The summary of the discussion about the hyperbolic embedding level in the last session."),
+    (memory_pb2.MEMORY_KIND_ROLE, "You are a researcher in Termitaria swarm。"),
+    (memory_pb2.MEMORY_KIND_RULE, "You must provide evidence for your reference. If you are unsure, state clearly you are unsure."),
+    (memory_pb2.MEMORY_KIND_PRINCIPLE, "First validate the hypothesis, then expand the investment."),
+    (memory_pb2.MEMORY_KIND_EPISODE, "No episode is stored for this agent yet."),
 )
 
 _PRINCIPLE_SIDE = frozenset(
@@ -35,30 +32,25 @@ def build_recall_response(req: memory_pb2.RecallRequest) -> memory_pb2.RecallRes
             agent_id=req.agent_id,
             kind=kind,
             text=text,
-            score=1.0 - radius,  # 罐装分：越靠球心越高
-            poincare_radius=radius,
-            parent_id="",  # 下面按模板顺序串成链
+            score=1.0,
             occurred_at_ms=0,
         )
-        for kind, radius, text in _CANNED
+        for kind, text in _CANNED
     ]
-    for prev, cur in zip(items, items[1:]):
-        cur.parent_id = prev.item_id
     if req.depth == memory_pb2.RECALL_DEPTH_PRINCIPLES_ONLY:
         items = [it for it in items if it.kind in _PRINCIPLE_SIDE]
     elif req.depth == memory_pb2.RECALL_DEPTH_EPISODES_ONLY:
         items = [it for it in items if it.kind == memory_pb2.MEMORY_KIND_EPISODE]
-    # AUTO / UNSPECIFIED：全谱
     candidate_count = len(items)
     top_k = req.top_k or 5
     items = items[:top_k]
-    
+
     return memory_pb2.RecallResponse(
         items=items,
         meta=memory_pb2.RecallMeta(
             candidate_count=candidate_count,
             reranked_count=len(items),
             latency_ms=int((time.time() - started) * 1000),
-            degraded=False,  # 真内核里欧氏兜底时置 true，接口不变（架构 §9）
+            degraded=False,
         ),
     )

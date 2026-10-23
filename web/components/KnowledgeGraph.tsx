@@ -1,21 +1,43 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadMemoryGraph, type MemoryEdge, type MemoryGraph, type MemoryNode } from "../lib/api";
+import { loadProjectGraph, type ProjectGraph, type ProjectGraphEdge, type ProjectGraphNode } from "../lib/api";
+import { ProjectPaneSwitch, type ProjectPane } from "./ProjectPaneSwitch";
 
-const ENTITY_COLOR = "#8b7ec8";
+const KIND_COLOR: Record<string, string> = {
+  CONCEPT: "#2b5278",
+  DOCUMENT: "#3390ec",
+  PAPER: "#8b7ec8",
+  CLAIM: "#3d8b6e",
+};
 
-type Agent = { id: string; display_name: string };
+const KINDS = ["CONCEPT", "DOCUMENT", "PAPER", "CLAIM"] as const;
 
-function pickAgent(agents: Agent[], current: string) {
-  if (current && agents.some((agent) => agent.id === current)) return current;
-  if (agents.some((agent) => agent.id === "pi")) return "pi";
-  return agents[0]?.id ?? "";
+const EDGE_LABEL: Record<string, string> = {
+  CITES: "cites",
+  DERIVES_FROM: "derives from",
+  DEPENDS_ON: "depends on",
+  SUPPORTS: "supports",
+  CONTRADICTS: "contradicts",
+};
+
+function edgeLabel(kind: string) {
+  return EDGE_LABEL[kind] ?? kind.toLowerCase();
 }
 
-function neighborsOf(nodeId: string, nodes: MemoryNode[], edges: MemoryEdge[]) {
+function linkPhrase(direction: "out" | "in", kind: string) {
+  if (direction === "out") return edgeLabel(kind);
+  if (kind === "DERIVES_FROM") return "derived claim";
+  if (kind === "CITES") return "cited by";
+  if (kind === "DEPENDS_ON") return "depended on by";
+  if (kind === "SUPPORTS") return "supported by";
+  if (kind === "CONTRADICTS") return "contradicted by";
+  return edgeLabel(kind);
+}
+
+function neighborsOf(nodeId: string, nodes: ProjectGraphNode[], edges: ProjectGraphEdge[]) {
   const byId = new Map(nodes.map((node) => [node.id, node]));
-  const out: { edge: MemoryEdge; direction: "out" | "in"; node: MemoryNode }[] = [];
+  const out: { edge: ProjectGraphEdge; direction: "out" | "in"; node: ProjectGraphNode }[] = [];
   for (const edge of edges) {
     if (edge.source === nodeId) {
       const node = byId.get(edge.target);
@@ -28,32 +50,94 @@ function neighborsOf(nodeId: string, nodes: MemoryNode[], edges: MemoryEdge[]) {
   return out;
 }
 
+function ring(items: { id: string }[], cx: number, cy: number, radius: number, pos: Map<string, { x: number; y: number }>) {
+  items.forEach((node, index) => {
+    const angle = (Math.PI * 2 * index) / Math.max(items.length, 1) - Math.PI / 2;
+    pos.set(node.id, {
+      x: cx + radius * Math.cos(angle),
+      y: cy + radius * Math.sin(angle),
+    });
+  });
+}
+
+function place(nodes: ProjectGraphNode[], edges: ProjectGraphEdge[], size: number) {
+  const pos = new Map<string, { x: number; y: number }>();
+  const cx = size / 2;
+  const cy = size / 2;
+  const concepts = nodes.filter((node) => node.kind === "CONCEPT");
+  const docs = nodes.filter((node) => node.kind === "DOCUMENT" || node.kind === "PAPER");
+  const claims = nodes.filter((node) => node.kind === "CLAIM");
+  const rest = nodes.filter((node) => node.kind !== "CONCEPT" && node.kind !== "DOCUMENT" && node.kind !== "PAPER" && node.kind !== "CLAIM");
+  if (concepts.length <= 1) {
+    concepts.forEach((node) => pos.set(node.id, { x: cx, y: cy }));
+  } else {
+    ring(concepts, cx, cy, 48, pos);
+  }
+  ring(docs, cx, cy, 188, pos);
+  const docIds = new Set(docs.map((node) => node.id));
+  const docAngle = new Map<string, number>();
+  docs.forEach((node, index) => {
+    docAngle.set(node.id, (Math.PI * 2 * index) / Math.max(docs.length, 1) - Math.PI / 2);
+  });
+  const grouped = new Map<string, ProjectGraphNode[]>();
+  const loose: ProjectGraphNode[] = [];
+  for (const claim of claims) {
+    let docId = "";
+    for (const edge of edges) {
+      if (edge.source === claim.id && docIds.has(edge.target)) docId = edge.target;
+      if (edge.target === claim.id && docIds.has(edge.source)) docId = edge.source;
+    }
+    if (!docId) {
+      loose.push(claim);
+      continue;
+    }
+    const list = grouped.get(docId) ?? [];
+    list.push(claim);
+    grouped.set(docId, list);
+  }
+  for (const [docId, list] of grouped) {
+    const base = docAngle.get(docId) ?? -Math.PI / 2;
+    const span = Math.min(Math.PI * 0.95, Math.max(list.length - 1, 1) * 0.55);
+    list.forEach((claim, index) => {
+      const t = list.length === 1 ? 0 : index / (list.length - 1) - 0.5;
+      const angle = base + t * span;
+      pos.set(claim.id, {
+        x: cx + 330 * Math.cos(angle),
+        y: cy + 330 * Math.sin(angle),
+      });
+    });
+  }
+  ring(loose, cx, cy, 310, pos);
+  ring(rest, cx, cy, 310, pos);
+  return pos;
+}
+
+function shortLabel(node: ProjectGraphNode) {
+  const raw = node.title || node.id;
+  const max = node.kind === "CLAIM" ? 18 : 22;
+  return raw.length > max ? `${raw.slice(0, max - 1)}…` : raw;
+}
+
 export function KnowledgeGraph({
-  agents,
-  onChats,
+  projectId,
+  onPane,
 }: {
-  agents: Agent[];
-  onChats: () => void;
+  projectId: string;
+  onPane: (pane: ProjectPane) => void;
 }) {
-  const [agentId, setAgentId] = useState(() => pickAgent(agents, ""));
-  const [graph, setGraph] = useState<MemoryGraph | null>(null);
-  const [status, setStatus] = useState("Loading the graph.");
+  const [graph, setGraph] = useState<ProjectGraph | null>(null);
+  const [status, setStatus] = useState("Loading the knowledge graph.");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
-    const next = pickAgent(agents, agentId);
-    if (next !== agentId) setAgentId(next);
-  }, [agents, agentId]);
-
-  useEffect(() => {
-    if (!agentId) {
+    if (!projectId) {
       setGraph(null);
-      setStatus("This project has no agent.");
+      setStatus("This project has no knowledge graph yet.");
       return;
     }
     let cancelled = false;
-    setStatus(`Loading the graph for ${agentId}.`);
-    loadMemoryGraph(agentId)
+    setStatus("Loading the knowledge graph.");
+    loadProjectGraph(projectId)
       .then((payload) => {
         if (cancelled) return;
         setGraph(payload);
@@ -63,31 +147,22 @@ export function KnowledgeGraph({
       .catch((err: Error) => {
         if (cancelled) return;
         setGraph(null);
-        setStatus(err.message || "The memory graph is not reachable.");
+        setStatus(err.message || "The knowledge graph is not reachable.");
       });
     return () => {
       cancelled = true;
     };
-  }, [agentId]);
+  }, [projectId]);
 
   const nodes = graph?.nodes ?? [];
   const edges = graph?.edges ?? [];
   const selected = nodes.find((node) => node.id === selectedId) ?? null;
   const neighbors = selected ? neighborsOf(selected.id, nodes, edges) : [];
   const neighborIds = new Set(neighbors.map((item) => item.node.id));
-  const caption = describe(agentId, graph, status);
+  const caption = describe(graph, status);
 
-  const size = 640;
-  const center = size / 2;
-  const radius = 210;
-  const pos = new Map<string, { x: number; y: number }>();
-  nodes.forEach((node, index) => {
-    const angle = (Math.PI * 2 * index) / Math.max(nodes.length, 1) - Math.PI / 2;
-    pos.set(node.id, {
-      x: center + radius * Math.cos(angle),
-      y: center + radius * Math.sin(angle),
-    });
-  });
+  const size = 760;
+  const pos = place(nodes, edges, size);
 
   return (
     <section className="kg" aria-label="Knowledge graph">
@@ -95,36 +170,24 @@ export function KnowledgeGraph({
         <div className="pane-title">
           <h1>Knowledge graph</h1>
           <p>{caption}</p>
-          {agents.length > 0 ? (
-            <label className="kg-agent">
-              Agent
-              <select value={agentId} onChange={(event) => setAgentId(event.target.value)}>
-                {agents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.display_name || agent.id}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
+          <div className="kg-legend">
+            {KINDS.map((kind) => (
+              <span key={kind}>
+                <i className="kg-swatch" style={{ background: KIND_COLOR[kind] }} />
+                {kind.toLowerCase()}
+              </span>
+            ))}
+          </div>
         </div>
-        <div className="pane-switch" role="tablist" aria-label="Project views">
-          <button type="button" role="tab" aria-selected={false} onClick={onChats}>
-            Chats
-          </button>
-          <button type="button" role="tab" aria-selected>
-            Knowledge
-          </button>
-        </div>
+        <ProjectPaneSwitch pane="knowledge" onChange={onPane} />
       </header>
       <div className="kg-body">
-        <svg className={selected ? "picked" : ""} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Knowledge graph structure">
+        <svg className={selected ? "picked" : ""} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Project knowledge graph">
           {edges.map((edge) => {
             const a = pos.get(edge.source);
             const b = pos.get(edge.target);
             if (!a || !b) return null;
             const hot = selected && (edge.source === selected.id || edge.target === selected.id);
-            const expired = edge.expired ? " expired" : "";
             return (
               <line
                 key={edge.id}
@@ -132,7 +195,7 @@ export function KnowledgeGraph({
                 y1={a.y}
                 x2={b.x}
                 y2={b.y}
-                className={`kg-edge${hot ? " hot" : ""}${expired}`}
+                className={`kg-edge${hot ? " hot" : ""}`}
               />
             );
           })}
@@ -141,6 +204,8 @@ export function KnowledgeGraph({
             if (!at) return null;
             const on = selected?.id === node.id;
             const near = neighborIds.has(node.id);
+            const radius = node.kind === "CLAIM" ? 16 : on ? 28 : 22;
+            const outward = node.kind === "CONCEPT" || at.y >= size / 2 ? 1 : -1;
             return (
               <g
                 key={node.id}
@@ -148,15 +213,15 @@ export function KnowledgeGraph({
                 className={`kg-node${on ? " on" : ""}${near ? " near" : ""}`}
                 role="button"
                 tabIndex={0}
-                aria-label={node.name}
+                aria-label={`${node.kind} ${node.title}`}
                 onClick={() => setSelectedId(node.id)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") setSelectedId(node.id);
                 }}
               >
-                <circle r={on ? 28 : 22} fill={ENTITY_COLOR} />
-                <text textAnchor="middle" dy="44" className="kg-label">
-                  {node.name.length > 28 ? `${node.name.slice(0, 26)}…` : node.name}
+                <circle r={radius} fill={KIND_COLOR[node.kind] ?? "#8b7ec8"} />
+                <text textAnchor="middle" dy={outward * (radius + 16)} className="kg-label">
+                  {shortLabel(node)}
                 </text>
               </g>
             );
@@ -165,27 +230,24 @@ export function KnowledgeGraph({
         <aside className="kg-detail" aria-label="Selected node">
           {selected ? (
             <>
-              <span className="seed-kind">entity</span>
-              <h2>{selected.name}</h2>
-              <p>{selected.summary || "No summary."}</p>
-              <h3>Neighbors</h3>
-              {neighbors.length === 0 ? <p className="slot-hint">No neighbors</p> : null}
+              <span className="kg-kind">{selected.kind}</span>
+              <h2>{selected.title || selected.id}</h2>
+              {selected.text && selected.text.length > selected.title.length ? <p className="body">{selected.text}</p> : null}
+              <h3>Links</h3>
+              {neighbors.length === 0 ? <p className="slot-hint">No links</p> : null}
               <ul>
                 {neighbors.map((item) => (
                   <li key={item.edge.id + item.direction}>
                     <button type="button" onClick={() => setSelectedId(item.node.id)}>
-                      <span>
-                        {item.direction === "out" ? item.edge.fact : `${item.edge.fact} · incoming`}
-                        {item.edge.expired ? " · expired" : ""}
-                      </span>
-                      <strong>{item.node.name}</strong>
+                      <span>{linkPhrase(item.direction, item.edge.kind)}</span>
+                      <strong>{item.node.title || item.node.id}</strong>
                     </button>
                   </li>
                 ))}
               </ul>
             </>
           ) : (
-            <p className="slot-hint">Select a node to read its summary and facts.</p>
+            <p className="slot-hint">Select a node to read its text and links.</p>
           )}
         </aside>
       </div>
@@ -193,15 +255,10 @@ export function KnowledgeGraph({
   );
 }
 
-function describe(agentId: string, graph: MemoryGraph | null, status: string) {
+function describe(graph: ProjectGraph | null, status: string) {
   if (status) return status;
-  if (!graph) return status;
-  if (!graph.backend) return "The memory graph is not reachable.";
-  if (graph.backend !== "graphiti") {
-    return "This view reads the Graphiti graph. Set MEMORY_BACKEND=graphiti and restart.";
-  }
-  if (graph.nodes.length === 0) {
-    return `No entities have been stored for ${agentId} yet.`;
-  }
-  return `Graphiti graph for ${agentId}. Click a node to read its summary and facts.`;
+  if (!graph || graph.nodes.length === 0) return "This project has no documents in the knowledge graph yet.";
+  const docs = graph.nodes.filter((node) => node.kind === "DOCUMENT" || node.kind === "PAPER").length;
+  const claims = graph.nodes.filter((node) => node.kind === "CLAIM").length;
+  return `${docs} documents, ${claims} claims. Click a node to read its text and links.`;
 }

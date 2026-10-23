@@ -19,6 +19,7 @@ type AgentSpec struct {
 	Kind        string   `yaml:"kind"`
 	RolePrompt  string   `yaml:"rolePrompt"`
 	Tools       []string `yaml:"tools"`
+	Skills      []string `yaml:"skills"`
 	Budget      struct {
 		MaxTokens uint32 `yaml:"maxTokens"`
 	} `yaml:"budget"`
@@ -110,4 +111,40 @@ func LoadDir(dir string) ([]*Spec, error) {
 		return nil, fmt.Errorf("no swarm specs in %s", dir)
 	}
 	return specs, nil
+}
+
+// SkillNames 读 skills/*.md 的 frontmatter name。目录不存在时返回空表。
+func SkillNames(dir string) (map[string]struct{}, error) {
+	out := map[string]struct{}{}
+	paths, err := filepath.Glob(filepath.Join(dir, "*.md"))
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		text := string(raw)
+		if strings.HasPrefix(text, "---") {
+			rest := text[3:]
+			end := strings.Index(rest, "\n---")
+			if end >= 0 {
+				var meta struct {
+					Name string `yaml:"name"`
+				}
+				if err := yaml.Unmarshal([]byte(rest[:end]), &meta); err != nil {
+					return nil, fmt.Errorf("%s: %w", path, err)
+				}
+				if strings.TrimSpace(meta.Name) != "" {
+					name = strings.TrimSpace(meta.Name)
+				}
+			}
+		}
+		if name != "" {
+			out[name] = struct{}{}
+		}
+	}
+	return out, nil
 }

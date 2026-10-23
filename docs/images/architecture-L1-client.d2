@@ -31,7 +31,7 @@ app: "Next.js App (web)" {
 
   presence: "Presence & Typing\nwho is online / which agent is thinking"
   swarmview: "Swarm View\nlive mesh: agents as nodes, sessions as edges"
-  inspector: "Memory Inspector\nKG node preview · agent memory tree"
+  inspector: "Memory Inspector\nthis project's KG nodes · one agent's memory items"
 }
 
 gw: "Control Plane API (Go)" {
@@ -47,7 +47,7 @@ app.chat.timeline <-> gw.ws: "messages"
 app.presence <- gw.ws: "presence events"
 app.swarmview <- gw.ws: "mesh topology events"
 app.shell.composer -> gw.rest: "send message /\nattach document"
-app.inspector <-> gw.rest: "read KG node /\nagent memory slice"
+app.inspector <-> gw.rest: "read this project's KG node /\none agent's memory items"
 
 note: |md
   **MVP scope**
