@@ -1,10 +1,11 @@
-"""session 关闭时，给每个参与 agent 写一条情节。
+"""每条用户原句立刻写给该会话里的每个 agent。
 
-记忆服务自己订阅 sessions.*。情节是这段会话的逐句记录，只写入该 agent 自己的库。
-助手的话带上发言者，不写成没有出处的事实。会话开着的时候不写，所以不挡住聊天。
+记忆服务自己订阅 sessions.*。只写用户说的那一句，助手的回复不写。
+启动时重放 Opened / Closed 只为了知道会话属于谁，不把旧句子再写一遍。
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 
 from nats.js.api import AckPolicy, ConsumerConfig, DeliverPolicy
@@ -20,7 +21,7 @@ log = logging.getLogger(__name__)
 _STREAM = "SESSIONS"
 _DURABLE = "memory-distiller"
 _WRITE_EPISODE = "memory.write.episode"
-_MAX_LINES = 40
+_WRITE_DOCUMENT = "memory.write.document"
 
 
 class Distiller:
@@ -29,8 +30,6 @@ class Distiller:
         self._cfg = cfg
         # session_id → agent participants。启动时重放 Opened / Closed 重建。
         self._participants: dict[str, list[str]] = {}
-        # session_id → 本段会话的逐句记录。关闭时才发出。
-        self._lines: dict[str, list[str]] = {}
         # 已发出的 (session_id, agent_id)，测试断言口。
         self.fanned_out: list[tuple[str, str]] = []
 
@@ -55,11 +54,9 @@ class Distiller:
             log.exception("unparseable session event, ack to drop")
             await msg.ack()
             return
-        if ev.WhichOneof("event") == "closed":
-            await self._distill(ev, env.trace_id)
         self._apply_roster(ev)
         if ev.WhichOneof("event") == "message_appended":
-            self._note(ev)
+            await self._write_user_sentence(ev, env.trace_id)
         await msg.ack()
 
     async def _recover_participants(self) -> None:
@@ -96,46 +93,33 @@ class Distiller:
             log.exception("unparseable session event during replay")
             return
         self._apply_roster(ev)
-        self._note(ev)
 
     def _apply_roster(self, ev: session_pb2.SessionEvent) -> None:
         kind = ev.WhichOneof("event")
         if kind == "opened":
             agents = [p.agent_id for p in ev.opened.session.participants if p.HasField("agent_id")]
             self._participants[ev.session_id] = agents
-            self._lines.setdefault(ev.session_id, [])
         elif kind == "closed":
             self._participants.pop(ev.session_id, None)
-            self._lines.pop(ev.session_id, None)
 
-    def _note(self, ev: session_pb2.SessionEvent) -> None:
-        if ev.WhichOneof("event") != "message_appended":
+    async def _write_user_sentence(self, ev: session_pb2.SessionEvent, trace_id: str) -> None:
+        text = _user_text(ev.message_appended.message)
+        if not text:
             return
-        if ev.session_id not in self._participants:
-            return
-        line = _line(ev.message_appended.message)
-        if not line:
-            return
-        bucket = self._lines.setdefault(ev.session_id, [])
-        if len(bucket) < _MAX_LINES:
-            bucket.append(line)
-
-    async def _distill(self, ev: session_pb2.SessionEvent, trace_id: str) -> None:
         agents = self._participants.get(ev.session_id, [])
-        lines = list(self._lines.get(ev.session_id, []))
-        summary = "\n".join(lines).strip()
-        if not summary:
-            return
         log.info(
-            "session closed %s → episode for %d agents (trace=%s)",
-            ev.session_id, len(agents), trace_id,
+            "user line session=%s project=%s write %d agents (trace=%s)",
+            ev.session_id, ev.swarm_id, len(agents), trace_id,
         )
+        if ev.swarm_id:
+            await self._publish_document(ev.swarm_id, text, trace_id)
         for agent_id in agents:
             episode = memory_pb2.Episode(
                 agent_id=agent_id,
                 session_id=ev.session_id,
-                summary=summary,
-                salient_spans=lines[:12],
+                swarm_id=ev.swarm_id,
+                summary=text,
+                salient_spans=[text],
                 occurred_at_ms=envelope.now_ms(),
             )
             payload = envelope.pack(
@@ -151,27 +135,37 @@ class Distiller:
                 )
                 continue
             self.fanned_out.append((ev.session_id, agent_id))
-            log.info("wrote episode agent=%s session=%s", agent_id, ev.session_id)
+            log.info("wrote episode agent=%s session=%s project=%s", agent_id, ev.session_id, ev.swarm_id)
+
+    async def _publish_document(self, swarm_id: str, text: str, trace_id: str) -> None:
+        digest = hashlib.sha256(f"{swarm_id}\n{text}".encode()).hexdigest()[:12]
+        doc_id = f"{swarm_id}/line_{digest}"
+        document = memory_pb2.Document(
+            doc_id=doc_id,
+            title=text[:80],
+            content_ref=text,
+            mime_type="text/plain",
+            uploader_id="user",
+        )
+        payload = envelope.pack(
+            self._cfg.producer,
+            trace_id,
+            memory_pb2.WriteDocumentRequest(document=document),
+        )
+        try:
+            await self._js.publish(_WRITE_DOCUMENT, payload)
+        except Exception:
+            log.exception("publish document project=%s", swarm_id)
+            return
+        log.info("wrote document project=%s id=%s", swarm_id, doc_id)
 
 
-def _line(message: session_pb2.Message) -> str:
-    text = _message_text(message)
-    if not text:
-        return ""
+def _user_text(message: session_pb2.Message) -> str:
     speaker = getattr(message, "from")
-    kind = speaker.WhichOneof("kind")
-    if kind == "user_id":
-        who = "user"
-    elif kind == "agent_id":
-        who = speaker.agent_id or "agent"
-    else:
-        who = "note"
-    return f"{who}: {text}"
-
-
-def _message_text(message: session_pb2.Message) -> str:
+    if speaker.WhichOneof("kind") != "user_id":
+        return ""
     parts = []
     for block in message.content:
         if block.WhichOneof("block") == "text" and block.text:
             parts.append(block.text)
-    return "\n".join(parts)
+    return "\n".join(parts).strip()

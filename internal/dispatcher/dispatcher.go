@@ -205,7 +205,7 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 		log.Printf("agent %q 不在 registry，跳过（MVP 静态配置；Scheduler 落地后消失）", agentID)
 		return nil
 	}
-	recalled, err := d.recall(ctx, agentID, messageText(msg), traceID)
+	recalled, err := d.recall(ctx, agentID, messageText(msg), ev.GetSwarmId(), traceID)
 	if err != nil {
 		log.Printf("memory.recall agent=%s: %v（保持角色条目）", agentID, err)
 		recalled = nil
@@ -256,12 +256,13 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 }
 
 // recall 在 dispatch 前同步问 memory.recall。超时见 recallWait。失败则调用方保留静态角色。
-func (d *Dispatcher) recall(ctx context.Context, agentID, query, traceID string) ([]*memoryv1.MemoryItem, error) {
+func (d *Dispatcher) recall(ctx context.Context, agentID, query, swarmID, traceID string) ([]*memoryv1.MemoryItem, error) {
 	req := &memoryv1.RecallRequest{
 		AgentId:   agentID,
 		QueryText: query,
 		Depth:     memoryv1.RecallDepth_RECALL_DEPTH_AUTO,
 		TopK:      5,
+		SwarmId:   swarmID,
 	}
 	env, err := bus.NewEnvelope(producer, traceID, req)
 	if err != nil {

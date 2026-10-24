@@ -6,6 +6,7 @@ gen/
 
 # environment and secret
 .env
+.env_old
 
 # Python
 .venv/

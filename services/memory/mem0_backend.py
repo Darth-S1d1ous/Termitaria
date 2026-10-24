@@ -89,9 +89,9 @@ class Mem0Backend:
                 self._memory.search,
                 req.query_text,
                 agent_id=req.agent_id,
-                limit=limit,
+                limit=max(limit * 8, limit),
             )
-        hits = _hits(raw)
+        hits = [hit for hit in _hits(raw) if _swarm_id(hit) == req.swarm_id][:limit]
         return assemble_response(req, mem0_items(req.agent_id, hits), started=started)
 
     async def write_episode(self, req: memory_pb2.WriteEpisodeRequest) -> str:
@@ -103,7 +103,11 @@ class Mem0Backend:
             text,
             agent_id=episode.agent_id,
             run_id=episode.session_id,
-            metadata={"occurred_at_ms": episode.occurred_at_ms, "run_id": episode.session_id},
+            metadata={
+                "occurred_at_ms": episode.occurred_at_ms,
+                "run_id": episode.session_id,
+                "swarm_id": episode.swarm_id,
+            },
         )
         async with self._lock:
             raw = await asyncio.to_thread(self._memory.add, messages, **kwargs)
@@ -140,6 +144,13 @@ def add_messages(
     if run_id:
         kwargs["run_id"] = run_id
     return [{"role": "user", "content": text}], kwargs
+
+
+def _swarm_id(hit: dict) -> str:
+    meta = hit.get("metadata") or {}
+    if not isinstance(meta, dict):
+        return ""
+    return str(meta.get("swarm_id") or "")
 
 
 def _hits(raw) -> list[dict]:

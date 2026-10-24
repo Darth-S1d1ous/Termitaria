@@ -26,7 +26,12 @@ class CannedBackend:
         return resp
 
     async def write_episode(self, req: memory_pb2.WriteEpisodeRequest) -> str:
-        del req
+        episode = req.episode
+        log.error(
+            "episode dropped, backend is canned agent=%s session=%s",
+            episode.agent_id,
+            episode.session_id,
+        )
         return ""
 
     async def write_document(self, req: memory_pb2.WriteDocumentRequest) -> str:

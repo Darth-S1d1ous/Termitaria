@@ -8,11 +8,11 @@ import time
 
 from termitaria.memory.v1 import memory_pb2
 
+# 不要放一条假的 episode。worker 会把它写进 Remembered facts，模型就会说什么都没记住。
 _CANNED = (
     (memory_pb2.MEMORY_KIND_ROLE, "You are a researcher in Termitaria swarm。"),
     (memory_pb2.MEMORY_KIND_RULE, "You must provide evidence for your reference. If you are unsure, state clearly you are unsure."),
     (memory_pb2.MEMORY_KIND_PRINCIPLE, "First validate the hypothesis, then expand the investment."),
-    (memory_pb2.MEMORY_KIND_EPISODE, "No episode is stored for this agent yet."),
 )
 
 _PRINCIPLE_SIDE = frozenset(

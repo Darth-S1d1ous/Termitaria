@@ -62,24 +62,29 @@ class PostgresRows:
               text TEXT NOT NULL,
               score DOUBLE PRECISION NOT NULL DEFAULT 0,
               source_session_id TEXT NOT NULL DEFAULT '',
-              occurred_at_ms BIGINT NOT NULL DEFAULT 0
+              occurred_at_ms BIGINT NOT NULL DEFAULT 0,
+              swarm_id TEXT NOT NULL DEFAULT ''
             )
             """
         )
         self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS agent_memory_agent ON agent_memory (agent_id)"
+            "ALTER TABLE agent_memory ADD COLUMN IF NOT EXISTS swarm_id TEXT NOT NULL DEFAULT ''"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS agent_memory_agent ON agent_memory (agent_id, swarm_id)"
         )
 
     def upsert(self, row: dict) -> None:
         self._conn.execute(
             """
             INSERT INTO agent_memory
-              (item_id, agent_id, kind, text, score, source_session_id, occurred_at_ms)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+              (item_id, agent_id, kind, text, score, source_session_id, occurred_at_ms, swarm_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (item_id) DO UPDATE SET
               text = EXCLUDED.text,
               score = EXCLUDED.score,
-              occurred_at_ms = EXCLUDED.occurred_at_ms
+              occurred_at_ms = EXCLUDED.occurred_at_ms,
+              swarm_id = EXCLUDED.swarm_id
             """,
             (
                 row["item_id"],
@@ -89,18 +94,19 @@ class PostgresRows:
                 row["score"],
                 row["source_session_id"],
                 row["occurred_at_ms"],
+                row.get("swarm_id") or "",
             ),
         )
 
     def list_agent(self, agent_id: str) -> list[dict]:
         cur = self._conn.execute(
             """
-            SELECT item_id, agent_id, kind, text, score, source_session_id, occurred_at_ms
+            SELECT item_id, agent_id, kind, text, score, source_session_id, occurred_at_ms, swarm_id
             FROM agent_memory WHERE agent_id = %s
             """,
             (agent_id,),
         )
-        cols = ["item_id", "agent_id", "kind", "text", "score", "source_session_id", "occurred_at_ms"]
+        cols = ["item_id", "agent_id", "kind", "text", "score", "source_session_id", "occurred_at_ms", "swarm_id"]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
@@ -112,10 +118,10 @@ class LocalVectors:
         self._points = [p for p in self._points if p["item_id"] != point["item_id"]]
         self._points.append(dict(point))
 
-    def search(self, agent_id: str, vector: list[float], limit: int) -> list[dict]:
+    def search(self, agent_id: str, vector: list[float], limit: int, swarm_id: str = "") -> list[dict]:
         scored = []
         for point in self._points:
-            if point["agent_id"] != agent_id:
+            if point["agent_id"] != agent_id or str(point.get("swarm_id") or "") != swarm_id:
                 continue
             score = sum(a * b for a, b in zip(vector, point["vector"]))
             scored.append((score, point))
@@ -133,7 +139,13 @@ class QdrantVectors:
         from qdrant_client import QdrantClient
         from qdrant_client.models import Distance, VectorParams
 
-        self._client = QdrantClient(host=host, port=port)
+        # 本机 HTTP 代理会把 localhost:6333 回成 502，初始化失败后整段记忆退回 canned。
+        self._client = QdrantClient(
+            host=host,
+            port=port,
+            trust_env=False,
+            check_compatibility=False,
+        )
         self._collection = collection
         if not self._client.collection_exists(collection):
             self._client.create_collection(
@@ -155,27 +167,31 @@ class QdrantVectors:
                         "item_id": point["item_id"],
                         "text": point["text"],
                         "session_id": point["session_id"],
+                        "swarm_id": point.get("swarm_id") or "",
                         "occurred_at_ms": point["occurred_at_ms"],
                     },
                 )
             ],
         )
 
-    def search(self, agent_id: str, vector: list[float], limit: int) -> list[dict]:
+    def search(self, agent_id: str, vector: list[float], limit: int, swarm_id: str = "") -> list[dict]:
         from qdrant_client.models import FieldCondition, Filter, MatchValue
 
         found = self._client.query_points(
             collection_name=self._collection,
             query=vector,
             query_filter=Filter(
-                must=[FieldCondition(key="agent_id", match=MatchValue(value=agent_id))]
+                must=[
+                    FieldCondition(key="agent_id", match=MatchValue(value=agent_id)),
+                    FieldCondition(key="swarm_id", match=MatchValue(value=swarm_id)),
+                ]
             ),
             limit=limit,
         )
         out = []
         for hit in found.points:
             payload = hit.payload or {}
-            if payload.get("agent_id") != agent_id:
+            if payload.get("agent_id") != agent_id or str(payload.get("swarm_id") or "") != swarm_id:
                 continue
             out.append(
                 {
@@ -184,6 +200,7 @@ class QdrantVectors:
                     "text": payload.get("text") or "",
                     "score": float(hit.score or 0.0),
                     "session_id": payload.get("session_id") or "",
+                    "swarm_id": payload.get("swarm_id") or "",
                     "occurred_at_ms": int(payload.get("occurred_at_ms") or 0),
                 }
             )
@@ -254,12 +271,14 @@ class AgentBackend:
         items = [_item(row) for row in rows if row["kind"] in _STABLE]
         query = req.query_text.strip()
         limit = req.top_k or 5
+        swarm_id = req.swarm_id
         if query:
             vector = self._embed.embed(query)
-            hits = self._vectors.search(req.agent_id, vector, limit)
+            hits = self._vectors.search(req.agent_id, vector, limit, swarm_id)
         else:
             hits = [
-                row for row in rows if row["kind"] == memory_pb2.MEMORY_KIND_EPISODE
+                row for row in rows
+                if row["kind"] == memory_pb2.MEMORY_KIND_EPISODE and str(row.get("swarm_id") or "") == swarm_id
             ]
         seen = {item.item_id for item in items}
         for hit in hits:
@@ -277,7 +296,8 @@ class AgentBackend:
         text = episode.summary.strip()
         if not text or not episode.agent_id:
             return ""
-        item_id = f"ep_{episode.agent_id}_{episode.session_id or 'none'}"
+        digest = hashlib.sha256(text.encode()).hexdigest()[:12]
+        item_id = f"ep_{episode.agent_id}_{episode.session_id or 'none'}_{digest}"
         row = {
             "item_id": item_id,
             "agent_id": episode.agent_id,
@@ -287,6 +307,7 @@ class AgentBackend:
             "source_session_id": episode.session_id,
             "occurred_at_ms": episode.occurred_at_ms,
             "session_id": episode.session_id,
+            "swarm_id": episode.swarm_id,
         }
         async with self._lock:
             await asyncio.to_thread(self._write_sync, row)

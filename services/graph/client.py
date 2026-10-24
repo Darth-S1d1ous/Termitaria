@@ -21,6 +21,7 @@ class GraphClient:
         depth: int = 1,
         edge_kinds: list[int] | None = None,
         max_nodes: int = 32,
+        strict: bool = False,
     ) -> graph_pb2.QuerySubgraphResponse:
         if not seed_node_ids:
             return graph_pb2.QuerySubgraphResponse()
@@ -33,8 +34,24 @@ class GraphClient:
         try:
             return await self._stub.QuerySubgraph(req, timeout=self._timeout)
         except Exception:
+            if strict:
+                raise
             log.warning("graph query degraded: seeds=%s", seed_node_ids, exc_info=True)
             return graph_pb2.QuerySubgraphResponse()
-    
+
+    async def upsert_node(self, node: graph_pb2.Node) -> str:
+        resp = await self._stub.UpsertNode(
+            graph_pb2.UpsertNodeRequest(node=node),
+            timeout=self._timeout,
+        )
+        return resp.node_id
+
+    async def upsert_edge(self, edge: graph_pb2.Edge) -> str:
+        resp = await self._stub.UpsertEdge(
+            graph_pb2.UpsertEdgeRequest(edge=edge),
+            timeout=self._timeout,
+        )
+        return resp.edge_id
+
     async def close(self) -> None:
         await self._channel.close()

@@ -10,6 +10,7 @@ from termitaria.session.v1 import session_pb2
 
 from services.common import envelope
 from services.memory.backend import CannedBackend, build_backend
+from services.memory.canned import build_recall_response
 from services.memory.config import MemoryConfig
 from services.memory.distiller import Distiller
 from services.memory.mem0_backend import add_messages
@@ -68,6 +69,12 @@ def test_backend_env_selects_graphiti_and_falls_back_for_the_key(monkeypatch):
     assert cfg.llm_base_url == "https://llm.example/v1"
     assert cfg.llm_model == "demo-model"
     assert cfg.falkordb_port == 6380
+
+
+def test_canned_recall_does_not_invent_an_empty_episode():
+    resp = build_recall_response(memory_pb2.RecallRequest(agent_id="pi", top_k=5))
+    assert resp.items
+    assert all(item.kind != memory_pb2.MEMORY_KIND_EPISODE for item in resp.items)
 
 
 def test_mem0_without_credentials_stays_on_canned():
@@ -183,7 +190,7 @@ def _agent_line(text: str) -> session_pb2.Message:
     return message
 
 
-def test_distiller_writes_one_episode_per_agent_when_the_session_closes():
+def test_distiller_writes_the_user_sentence_for_each_agent():
     async def run() -> None:
         js = _JS()
         distiller = Distiller(_NC(js), MemoryConfig(nats_url="nats://localhost:4222"))
@@ -214,24 +221,28 @@ def test_distiller_writes_one_episode_per_agent_when_the_session_closes():
             swarm_id="sw1",
             closed=session_pb2.SessionClosed(reason="done"),
         )
-        for ev in (opened, user_line, agent_line):
-            await distiller._handle(_event(ev))
-        assert js.published == []
+        await distiller._handle(_event(opened))
+        await distiller._handle(_event(user_line))
+        assert distiller.fanned_out == [("s1", "ideator"), ("s1", "reviewer")]
+        await distiller._handle(_event(agent_line))
         await distiller._handle(_event(closed))
 
-        assert distiller.fanned_out == [("s1", "ideator"), ("s1", "reviewer")]
         assert [subject for subject, _ in js.published] == [
+            "memory.write.document",
             "memory.write.episode",
             "memory.write.episode",
         ]
         episodes = []
-        for _, data in js.published:
+        for subject, data in js.published:
+            if subject != "memory.write.episode":
+                continue
             _, req = envelope.unpack(data, memory_pb2.WriteEpisodeRequest)
             episodes.append(req.episode)
         assert {ep.agent_id for ep in episodes} == {"ideator", "reviewer"}
         assert episodes[0].session_id == "s1"
-        assert episodes[0].summary == "user: alpha\nideator: beta"
-        assert list(episodes[0].salient_spans) == ["user: alpha", "ideator: beta"]
+        assert episodes[0].swarm_id == "sw1"
+        assert episodes[0].summary == "alpha"
+        assert list(episodes[0].salient_spans) == ["alpha"]
 
     asyncio.run(run())
 
@@ -282,7 +293,12 @@ def test_distiller_restores_open_sessions_without_rewriting_old_lines():
             message_appended=session_pb2.MessageAppended(message=_user_line("hot chocolate")),
         )
         await distiller._handle(_event(fresh))
-        assert js.published == []
+        assert distiller.fanned_out == [("s1", "pi")]
+        _, doc = envelope.unpack(js.published[0][1], memory_pb2.WriteDocumentRequest)
+        assert doc.document.doc_id.startswith("sw1/")
+        _, req = envelope.unpack(js.published[1][1], memory_pb2.WriteEpisodeRequest)
+        assert req.episode.summary == "hot chocolate"
+        assert req.episode.swarm_id == "sw1"
         await distiller._handle(
             _event(
                 session_pb2.SessionEvent(
@@ -292,9 +308,7 @@ def test_distiller_restores_open_sessions_without_rewriting_old_lines():
                 )
             )
         )
-        assert distiller.fanned_out == [("s1", "pi")]
-        _, req = envelope.unpack(js.published[0][1], memory_pb2.WriteEpisodeRequest)
-        assert req.episode.summary == "user: butter\nuser: hot chocolate"
+        assert len(js.published) == 2
 
     asyncio.run(run())
 

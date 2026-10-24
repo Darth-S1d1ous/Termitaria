@@ -42,6 +42,7 @@ message Episode {
   repeated string salient_spans = 4;
   repeated string graph_node_ids = 5;  // 关联的 KG 节点
   int64 occurred_at_ms = 6;
+  string swarm_id = 7;         // 所属 project。召回只返回同一个 project 的情节。
 }
 
 message RecallRequest {
@@ -50,6 +51,7 @@ message RecallRequest {
   RecallDepth depth = 3;
   uint32 top_k = 4;
   common.v1.Budget budget = 5;  // 召回延迟预算（架构 §6.1：50–200ms）
+  string swarm_id = 6;          // 只召回这个 project 的情节
 }
 
 // RecallMeta 让召回过程可观测。

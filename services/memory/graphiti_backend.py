@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 
@@ -93,12 +94,13 @@ class GraphitiBackend:
         started = time.time()
         limit = req.top_k or 5
         async with self._lock:
+            group_id = _group_id(req.swarm_id, req.agent_id)
             edges = await self._graphiti.search(
                 req.query_text,
-                group_ids=[req.agent_id],
+                group_ids=[group_id],
                 num_results=limit,
             )
-            nodes = await _search_nodes(self._graphiti, req.query_text, req.agent_id, limit)
+            nodes = await _search_nodes(self._graphiti, req.query_text, group_id, limit)
         return assemble_response(
             req,
             graphiti_items(req.agent_id, nodes, edges),
@@ -111,8 +113,9 @@ class GraphitiBackend:
         if not text:
             return ""
         name = f"{episode.agent_id}:{episode.session_id}"
+        group_id = _group_id(episode.swarm_id, episode.agent_id)
         async with self._lock:
-            await self._add(name, text, episode.agent_id, episode.occurred_at_ms, message=True)
+            await self._add(name, text, group_id, episode.occurred_at_ms, message=True)
         return episode.session_id
 
     async def write_document(self, req: memory_pb2.WriteDocumentRequest) -> str:
@@ -120,7 +123,8 @@ class GraphitiBackend:
         text = "\n".join(part for part in (doc.title, doc.uri, doc.content_ref) if part)
         if not text:
             return doc.doc_id
-        who = doc.uploader_id or "documents"
+        project, _, _ = (doc.doc_id or "").partition("/")
+        who = _group_id(project, doc.uploader_id or "documents")
         async with self._lock:
             await self._add(doc.doc_id or who, text, who, 0, message=False)
         return doc.doc_id
@@ -138,6 +142,12 @@ class GraphitiBackend:
             source=source,
             group_id=group_id,
         )
+
+
+def _group_id(swarm_id: str, agent_id: str) -> str:
+    raw = f"{swarm_id}__{agent_id}" if swarm_id else agent_id
+    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", raw)
+    return cleaned[:64] or "agent"
 
 
 def _records(raw) -> list[dict]:

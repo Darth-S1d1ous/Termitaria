@@ -63,3 +63,60 @@ def test_recall_stays_inside_one_agent():
         assert empty == ""
 
     asyncio.run(run())
+
+
+def test_two_sentences_in_one_session_both_stay():
+    backend = _backend()
+
+    async def run() -> None:
+        for text in (
+            "We are working on Wi-Fi CSI breathing sensing.",
+            "What are we working on?",
+        ):
+            await backend.write_episode(
+                memory_pb2.WriteEpisodeRequest(
+                    episode=memory_pb2.Episode(
+                        agent_id="pi",
+                        session_id="s1",
+                        summary=text,
+                    )
+                )
+            )
+        recalled = await backend.recall(
+            memory_pb2.RecallRequest(agent_id="pi", query_text="breathing sensing", top_k=5)
+        )
+        texts = [item.text for item in recalled.items]
+        assert "We are working on Wi-Fi CSI breathing sensing." in texts
+        assert "What are we working on?" in texts
+
+    asyncio.run(run())
+
+
+def test_recall_stays_inside_one_project():
+    backend = _backend()
+
+    async def run() -> None:
+        for swarm, text in (
+            ("wifi", "The topic is Wi-Fi sensing."),
+            ("radar", "The topic is radar sensing."),
+        ):
+            await backend.write_episode(
+                memory_pb2.WriteEpisodeRequest(
+                    episode=memory_pb2.Episode(
+                        agent_id="pi",
+                        session_id=f"s-{swarm}",
+                        swarm_id=swarm,
+                        summary=text,
+                    )
+                )
+            )
+        wifi = await backend.recall(
+            memory_pb2.RecallRequest(agent_id="pi", swarm_id="wifi", query_text="topic", top_k=5)
+        )
+        radar = await backend.recall(
+            memory_pb2.RecallRequest(agent_id="pi", swarm_id="radar", query_text="topic", top_k=5)
+        )
+        assert [item.text for item in wifi.items] == ["The topic is Wi-Fi sensing."]
+        assert [item.text for item in radar.items] == ["The topic is radar sensing."]
+
+    asyncio.run(run())
