@@ -440,7 +440,7 @@ export function AppShell() {
     >
       <aside className="rail">
         <button className="mark" type="button" aria-label="Chats" onClick={() => setView("chats")}>
-          T
+          <img src="/termite.png" alt="" />
         </button>
         <div className="rail-scroll">
           {projects.map((item) => (

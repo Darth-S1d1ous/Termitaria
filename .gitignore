@@ -28,9 +28,11 @@ var/
 # local client state (projects and user-visible chats)
 data/
 
-# Concrete case runs and research drafts. Do not publish.
-examples/tsla/
-# Repo-root writeups: protocols, hypotheses, reviews. README.md stays tracked.
+# Case materials live under examples/. Swarm specs stay tracked.
+examples/*
+!examples/swarms/
+!examples/swarms/**
+# A new draft written at the repo root stays local. README.md stays tracked.
 /*.md
 !/README.md
 /protocol/
