@@ -12,13 +12,13 @@ import (
 	sessionv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/session/v1"
 )
 
-// delegateWait 要盖住同事自己的工具循环。一轮模型调用要几分钟，六轮加上排队会超过一刻钟。
-// 到点就取消任务，不让它继续占着接口，也不要把晚到的结果丢给已经往下走的负责人。
+// delegateWait 是这条 HTTP 接口自己的等待上限。
+// worker 的 delegate 工具不走这里：同事在负责人那一次 task 里跑完，结果作为工具返回。
+// 这个接口仍会开一条两人会话并等第一句回复，供测试和外部调用。会话不设轮次上限。
 var delegateWait = 25 * time.Minute
 
-// delegate 是 CrewAI「Delegate work to coworker」在这条总线上的做法：
-// 开一条两人会话，把任务写成第一条消息，等同事回一句，把正文交还给调用方。
-// 调用方还停在自己的那一轮里，所以用户不用先说一句才能往下走。
+// delegate 打开一条两人会话，写入任务，等同事的第一句回复。
+// 它不是 worker 里的派活实现。
 func (s *Server) delegate(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 	var body struct {
@@ -87,25 +87,7 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request) {
 	if ctx := strings.TrimSpace(body.Context); ctx != "" {
 		text += "\n\nContext:\n" + ctx
 	}
-	// 一轮交代、一轮交卷。交卷后会话挂起，负责人不会在这条支线上被再次叫醒。
-	sess, err := s.manager.OpenSession(r.Context(), projectID,
-		[]*sessionv1.Participant{
-			{Kind: &sessionv1.Participant_AgentId{AgentId: fromID}},
-			{Kind: &sessionv1.Participant_AgentId{AgentId: coworker.ID}},
-		},
-		&sessionv1.SessionPolicy{
-			TurnTaking: sessionv1.TurnTaking_TURN_TAKING_STRICT,
-			MaxTurns:   2,
-		},
-		"")
-	if err != nil {
-		writeError(w, 502, err.Error())
-		return
-	}
-	s.mu.Lock()
-	s.sessions[projectID+"/spoke/"+fromID+"/"+coworker.ID+"/"+sess.GetSessionId()] = sess.GetSessionId()
-	err = s.save()
-	s.mu.Unlock()
+	sess, err := s.spokeSession(r, projectID, fromID, coworker.ID)
 	if err != nil {
 		writeError(w, 502, err.Error())
 		return
@@ -136,6 +118,61 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request) {
 		"session_id": sess.GetSessionId(),
 		"agent_id":   coworker.ID,
 	})
+}
+
+// spokeSession 找到这对同事已经开着的会话，没有就新开一条。轮次不设上限。
+// worker 的 delegate 工具不调用这个函数。
+func (s *Server) spokeSession(r *http.Request, projectID, fromID, coworkerID string) (*sessionv1.Session, error) {
+	key := projectID + "/spoke/" + fromID + "/" + coworkerID
+	s.mu.Lock()
+	sessionID := s.sessions[key]
+	s.mu.Unlock()
+	if sessionID != "" {
+		snap, err := s.manager.Snapshot(r.Context(), sessionID, 0)
+		if err == nil && snap.Session.GetState() == sessionv1.SessionState_SESSION_STATE_OPEN {
+			return snap.Session, nil
+		}
+	}
+	sess, err := s.manager.OpenSession(r.Context(), projectID,
+		[]*sessionv1.Participant{
+			{Kind: &sessionv1.Participant_AgentId{AgentId: fromID}},
+			{Kind: &sessionv1.Participant_AgentId{AgentId: coworkerID}},
+		},
+		&sessionv1.SessionPolicy{
+			TurnTaking: sessionv1.TurnTaking_TURN_TAKING_STRICT,
+		},
+		"")
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.sessions[key] = sess.GetSessionId()
+	err = s.save()
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
+// SkipSpokeCaller 报告这条会话里不该再入队的调用方。
+// 同事回话之后，轮次会转回调用方；调用方还停在 delegate 的 HTTP 里，再入队就会和这次返回各跑一遍。
+func (s *Server) SkipSpokeCaller(sessionID, agentID string) bool {
+	if sessionID == "" || agentID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, id := range s.sessions {
+		if id != sessionID {
+			continue
+		}
+		parts := strings.Split(key, "/")
+		if len(parts) == 4 && parts[1] == "spoke" && parts[2] == agentID {
+			return true
+		}
+	}
+	return false
 }
 
 func agentByName(agents []agentJSON, name string) *agentJSON {

@@ -151,7 +151,7 @@ Client (Next.js) ──WS/REST──> Control Plane (Go)
 | 用户 → 单 agent 问答 | 首 token 0.3–1 s；完成 2–8 s |
 | agent ↔ agent 一轮 session | 3–15 s |
 | 记忆召回（RAG） | 50–200 ms（向量检索 20–50 ms + 可选重排 20–80 ms） |
-| 文档入库 → KG 可查 | 2–10 s，异步 |
+| 文档入库 → KG 可查 | 等到 Graphiti 抽取结束。常为数十秒，不阻塞用户那条聊天 |
 | swarm 冷启动（5 agent） | 0.5–2 s |
 | 消息扇出延迟（mesh 内） | p50 < 50 ms |
 

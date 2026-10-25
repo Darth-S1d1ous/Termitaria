@@ -23,13 +23,16 @@ async def amain() -> None:
     engine = await open_engine(cfg)
 
     nc = await nats.connect(cfg.nats_url, name="termitaria-graph")
-    server = await serve(cfg.grpc_addr, engine)
+    server = await serve(cfg.grpc_addr, engine, nc)
     ingestor = Ingestor(nc, cfg, engine)
     try:
         await asyncio.gather(server.wait_for_termination(), ingestor.run())
     finally:
         await server.stop(grace=2)
-        await nc.drain()
+        try:
+            await engine.close()
+        finally:
+            await nc.drain()
 
 if __name__ == "__main__":
     try:

@@ -5,15 +5,12 @@
 ## 两种触发模式
 
 - **worker = 消息/turn 驱动**：轮到说话才思考（`trigger_message_id`）。
-- **orchestrator = 事件驱动**：子结果到达（体现为 spoke 消息）、工单逾期、spoke 停滞、
-  项目启动（`system_trigger`）。orchestrator 不能等别人点名才说话——推进、催促、截停
-  都是主动行为。
+- **orchestrator**：用户在负责人的会话里发言会触发负责人的 task。同事不另开 task。`delegate` 在这次 task 里把同事跑完，工具结果交回来。
 
 ## 为什么 orchestrator 的思考也是 Task
 
 统一建模让通信层零新增：orchestrator 消费 `tasks.<swarm>.<orchestrator>`，走同一个
-consumer/runner 进程模型，HPA、至少一次投递、心跳重投全部复用；只是 graph 模板不同
-（plan→delegate→monitor→nudge→synthesize，对比 worker 的 reason→act→observe）。
+consumer/runner 进程模型，HPA、至少一次投递、心跳重投全部复用。负责人的 `delegate` 不另开一条 task。
 唯一的新逻辑在 Go dispatcher 的触发规则。
 
 ## 委派链字段

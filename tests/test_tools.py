@@ -273,7 +273,108 @@ def test_orchestrator_asks_instead_of_stopping(monkeypatch):
     assert "I will stop here." not in body
 
 
-def test_kg_tool_stores_a_claim_and_reads_relations():
+def test_workers_get_default_tools_without_spec():
+    from services.worker.tools import make_toolbox
+
+    worker = make_toolbox(
+        agent={"id": "ideator", "kind": "WORKER", "tools": ["kg_query"]},
+        project_id="p",
+        steps=[],
+        skills=[],
+        mcp_tools=[],
+        gateway="http://127.0.0.1:9",
+    )
+    for name in ("web_search", "fetch_url", "utc_time", "write_file"):
+        assert name in worker.names()
+    assert "delegate" not in worker.names()
+    assert "advance" not in worker.names()
+    assert "write_report" not in worker.names()
+
+    lead = make_toolbox(
+        agent={"id": "pi", "kind": "ORCHESTRATOR", "tools": ["ledger"]},
+        project_id="p",
+        steps=[],
+        skills=[],
+        mcp_tools=[],
+        gateway="http://127.0.0.1:9",
+    )
+    assert "web_search" not in lead.names()
+    assert "delegate" in lead.names()
+    assert "write_report" in lead.names()
+
+
+def test_report_requires_sections_and_tool_links():
+    from services.worker.tools import report_error
+
+    deliverable = {
+        "kind": "brief",
+        "min_chars": 40,
+        "require_deck": True,
+        "sections": [
+            {"heading": "Price table", "min_chars": 20, "citations": True},
+            {"heading": "Why", "min_chars": 20, "citations": True},
+        ],
+    }
+    urls = {"https://example.com/copper"}
+    missing = "## Price table\n\nMonday close was 4.52. https://example.com/copper\n"
+    assert "Why" in report_error(missing, deliverable, urls)
+    unlinked = (
+        "## Price table\n\nMonday close was 4.52.\n\n"
+        "## Why\n\nStocks fell at the warehouse and stayed low.\n"
+    )
+    assert "link" in report_error(unlinked, deliverable, urls)
+    invented = (
+        "## Price table\n\nMonday close was 4.52. https://evil.example/x\n\n"
+        "## Why\n\nStocks fell at the warehouse. https://evil.example/x\n"
+    )
+    assert "link" in report_error(invented, deliverable, urls)
+    good = (
+        "## Price table\n\nMonday close was 4.52. https://example.com/copper\n\n"
+        "## Why\n\nThe glossary is 200 tokens.\n\n"
+        "Stocks fell at the warehouse. https://example.com/copper https://evil.example/x\n"
+    )
+    assert report_error(good, deliverable, urls) == ""
+
+
+def test_only_the_lead_delegates_and_it_runs_here():
+    from services.worker.tools import make_toolbox
+
+    blocked = make_toolbox(
+        agent={"id": "ideator", "kind": "WORKER", "tools": ["delegate", "kg_query"]},
+        project_id="p",
+        steps=[],
+        skills=[],
+        mcp_tools=[],
+        gateway="http://127.0.0.1:9",
+    )
+    assert "delegate" not in blocked.names()
+
+    seen = {}
+
+    async def run(coworker, task, context):
+        seen["coworker"] = coworker
+        seen["task"] = task
+        seen["context"] = context
+        return "ideator replied:\nH1 holds."
+
+    lead = make_toolbox(
+        agent={"id": "pi", "kind": "ORCHESTRATOR", "tools": ["ledger"]},
+        project_id="p",
+        steps=[],
+        skills=[],
+        mcp_tools=[],
+        gateway="http://127.0.0.1:9",
+        seeds=[{"kind": "text", "title": "Question", "body": "GPQA"}],
+        delegate_run=run,
+    )
+    text = asyncio.run(lead.run("delegate", {"coworker": "ideator", "task": "Draft H1", "context": "gap"}))
+    assert seen["coworker"] == "ideator"
+    assert seen["task"] == "Draft H1"
+    assert "GPQA" in seen["context"]
+    assert text == "ideator replied:\nH1 holds."
+
+
+def test_kg_tool_queues_a_note_and_reads_relations():
     from services.graph.graphiti_kg import node_text
     from services.worker.tools import _kg_read, _kg_write
     from termitaria.graph.v1 import graph_pb2
@@ -291,8 +392,8 @@ def test_kg_tool_stores_a_claim_and_reads_relations():
             self.edges[edge.edge_id] = edge
             return edge.edge_id
 
-        async def query_subgraph(self, seeds, depth=1, relations=None, max_nodes=32, strict=False):
-            del seeds, depth, relations, max_nodes, strict
+        async def query_subgraph(self, seeds, depth=1, edge_kinds=None, max_nodes=32, strict=False):
+            del seeds, depth, edge_kinds, max_nodes, strict
             resp = graph_pb2.QuerySubgraphResponse()
             resp.nodes.extend(self.nodes.values())
             resp.edges.extend(self.edges.values())
@@ -305,8 +406,9 @@ def test_kg_tool_stores_a_claim_and_reads_relations():
             "p1",
             {"title": "Radar carrier", "text": "The carrier is 77 GHz.", "kind": "claim"},
         )
-        assert stored.startswith("Sent this text to Graphiti")
+        assert stored.startswith("Queued this text")
         assert any("77 GHz" in node_text(node) for node in client.nodes.values())
+        assert client.edges == {}
         await client.upsert_node(graph_pb2.Node(node_id="n1", kind=graph_pb2.NODE_KIND_CONCEPT, title="Northwire"))
         await client.upsert_node(graph_pb2.Node(node_id="n2", kind=graph_pb2.NODE_KIND_CONCEPT, title="Houston quote"))
         await client.upsert_edge(
@@ -324,6 +426,53 @@ def test_kg_tool_stores_a_claim_and_reads_relations():
         assert "CITES" not in text
 
     asyncio.run(run())
+
+
+def test_paper_fetch_returns_one_section(monkeypatch):
+    from services.worker.tools import _fetch_blocking
+
+    html = (
+        "<html><body><nav>Skip to main content</nav>"
+        "<h2>Abstract</h2><p>GPQA has 448 questions.</p>"
+        "<h2>Datasets</h2><p>Diamond has 198 items.</p></body></html>"
+    ).encode()
+
+    def fake_download(url, limit):
+        del limit
+        if "/html/" in url:
+            return 200, html, "text/html"
+        return 404, b"", ""
+
+    monkeypatch.setattr("services.worker.tools._download", fake_download)
+    text = _fetch_blocking("https://arxiv.org/abs/2311.12022", "Datasets")
+    assert "Diamond has 198 items." in text
+    assert "Skip to main content" not in text
+    assert "448 questions" not in text
+
+
+def test_unread_pdf_does_not_invent_citation_keys(monkeypatch):
+    from services.worker.tools import _fetch_blocking
+
+    monkeypatch.setattr("services.worker.tools._download", lambda url, limit: (200, b"%PDF-1.4 (cite.gpqa) cover", "application/pdf"))
+    monkeypatch.setattr("services.worker.tools._pdf_text", lambda data: "")
+    text = _fetch_blocking("https://example.com/paper.pdf")
+    assert "was not read" in text
+    assert "cite.gpqa" not in text
+
+
+def test_handoff_keeps_real_tools_and_drops_narrated_ones():
+    from services.worker.graph import coworker_handoff
+
+    text = coworker_handoff(
+        "The gap is open.\ntool: advance → Hypothesis marked done.\ntool: write_file → notes-litscan.md written.",
+        ["fetch_url → Paper https://arxiv.org/abs/2311.12022\n448 questions"],
+    )
+    spoken, _, rest = text.partition("Tools that ran:")
+    assert "Hypothesis marked done" not in spoken
+    assert "notes-litscan.md" not in spoken
+    assert "fetch_url → Paper" in rest
+    assert "Steps changed:\nnone" in text
+    assert "Files written:\nnone" in text
 
 
 def test_graph_builds():

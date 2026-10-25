@@ -253,27 +253,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 .confirm-delete span { flex: 1; min-width: 0; }
 
-.search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 12px;
-  padding: 0 12px;
-  height: 40px;
-  border-radius: 20px;
-  background: var(--hover);
-  color: var(--muted);
-  flex: none;
-}
-
-.search input {
-  border: 0;
-  background: transparent;
-  width: 100%;
-  outline: none;
-  color: var(--ink);
-}
-
 .rows {
   overflow: auto;
   flex: 1;
@@ -843,7 +822,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 0;
+  border: 1px solid var(--line);
   background: transparent;
   color: var(--muted);
   border-radius: 8px;
@@ -864,11 +843,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 }
 
 @container chatlist (max-width: 300px) {
+  .pane-switch { gap: 10px; }
   .pane-switch .pane-label { display: none; }
   .pane-switch .pane-ico { display: block; }
 }
 
 @container panehead (max-width: 520px) {
+  .pane-switch { gap: 10px; }
   .pane-switch .pane-label { display: none; }
   .pane-switch .pane-ico { display: block; }
 }

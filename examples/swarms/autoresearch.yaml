@@ -11,18 +11,22 @@ goal: |
   Given the user's library, produce a reviewed research hypothesis and an executable experiment plan:
   literature gap scan → hypothesis → experiment design → methods review, all written into the knowledge graph.
 
+deliverable:
+  kind: paper
+
 agents:
-  # 星心：项目管理员。恰好一个 orchestrator（schema minContains/maxContains = 1）。
-  # tools 里的 ledger 是控制面指令族（ledger.* tool_call：建工单/指派/验收），
-  # 由 Go 项目骨架校验后落 ledger.<swarm>.events——orchestrator 不直接写流。
+  # 恰好一个 orchestrator。tools 里的 ledger 在 worker 里是 advance 的别名，用来改项目步骤。
+  # 它不写 ledger.*.events。
   - id: pi
     kind: ORCHESTRATOR
     displayName: Principal Investigator
     rolePrompt: |
       You are the PI. You decompose the project goal into work items, assign them
-      to specialists, monitor the ledger, nudge stalled spokes, and review every
-      deliverable before accepting it. You never do the specialists' work yourself.
-    model: { defaultTier: SUPER, deepTier: ULTRA }  # 日常监控 Super，规划/验收升 Ultra
+      to specialists, and review every deliverable before accepting it.
+      Only you can delegate. A coworker runs inside your turn and cannot delegate.
+      Trust Tools that ran, Steps changed, and Files written. Ignore a claim that a step or a file changed when those sections do not say so.
+      You never do the specialists' work yourself.
+    model: { defaultTier: SUPER, deepTier: ULTRA }
     tools: [ledger, kg_query]
     budget: { maxTokens: 16384, maxCostUsd: 2.00 }
 
@@ -30,8 +34,9 @@ agents:
     displayName: Literature Collector
     rolePrompt: |
       You sweep the user's library and external sources for relevant work.
-      Every important paper becomes a knowledge-graph node with citation edges.
-      You are terse, precise, and allergic to unsourced claims.
+      Read an arXiv paper or a PDF with fetch_url, and pass section to open one heading.
+      Record an important paper with kg write. Graphiti extracts the entities and relations.
+      You cannot attach a citation edge yourself, and you cannot delegate.
     model: { defaultTier: SUPER, deepTier: ULTRA }
     tools: [web_search, kg_write, kg_query]
     budget: { maxTokens: 8192, maxCostUsd: 0.50 }
@@ -40,7 +45,7 @@ agents:
     displayName: Idea Generator
     rolePrompt: |
       You generate research hypotheses from gaps in the literature.
-      You debate the reviewer directly; you lose gracefully when wrong.
+      Return the hypothesis to the PI. You cannot delegate.
     model: { defaultTier: SUPER, deepTier: ULTRA }
     tools: [kg_query]
     budget: { maxTokens: 8192, maxCostUsd: 0.50 }
@@ -48,23 +53,23 @@ agents:
   - id: experimenter
     displayName: Experiment Designer
     rolePrompt: |
-      You turn hypotheses into executable experiment plans with A/B validation.
-      You negotiate compute with constraints, not wishes.
+      You turn hypotheses into an experiment plan: data, baselines, and what result would confirm or reject the hypothesis.
+      You cannot run the experiment. There is no code execution tool.
+      Return the plan to the PI. You cannot delegate.
     model: { defaultTier: SUPER, deepTier: ULTRA }
-    tools: [kg_query, code_exec]
+    tools: [kg_query]
     budget: { maxTokens: 16384, maxCostUsd: 1.00 }
 
   - id: reviewer
     displayName: Skeptical Reviewer
     rolePrompt: |
       You are reviewer #2. You attack methodology, novelty, and statistics.
-      Deep reasoning is your default; you never rubber-stamp.
-    model: { defaultTier: ULTRA, deepTier: ULTRA }  # 重推理角色常驻 Ultra
+      Return the review to the PI. You cannot delegate.
+    model: { defaultTier: ULTRA, deepTier: ULTRA }
     tools: [kg_query]
     budget: { maxTokens: 16384, maxCostUsd: 1.50 }
 
-# worker↔worker 默认禁止，下面是唯一的 opt-in 受控直连：评审 ↔ 想法 的挑战回路。
-# 其余协作一律经 orchestrator 中继（spoke 隐式存在，无需声明）。
+# edges 留在规格里。当前 delegate 不按这些边开会话。只有负责人能派活，同事在负责人这次 task 里执行。
 edges:
   - from: reviewer
     to: ideator

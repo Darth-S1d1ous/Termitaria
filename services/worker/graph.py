@@ -1,12 +1,14 @@
 """LangGraph worker 图（架构 §4：reason → act → observe）。
 
 工具调用收在 reason 这一轮里：模型吐 JSON，就地执行，结果写回窗口，再问一次。
-最终给用户的那句话才流式发出。这样负责人可以在同一轮里派活、收结果，不用把轮次交还给人。
-记忆不在图里读：TaskContext.recalled / graph_node_ids 由 Go 侧在 dispatch 前预取。
+负责人的 delegate 也在这一轮里把同事跑完。同事开始前读取自己的记忆和这个项目的知识图。
+最终给用户的那句话才流式发出。
+用户这条 task 的记忆和图仍由 Go dispatcher 在入队前预取。
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -27,7 +29,19 @@ from .mcp import load_mcp_tools
 from .model import Done, ModelPort
 from .rules import load_rules
 from .skills import load_skills
-from .tools import Toolbox, load_project, make_toolbox, materials_text, mention_delegates, parse_tool_calls, visible_text
+from . import envelope
+from .tools import (
+    Toolbox,
+    collect_urls,
+    load_project,
+    make_toolbox,
+    materials_text,
+    mention_delegates,
+    parse_tool_calls,
+    visible_text,
+)
+
+log = logging.getLogger(__name__)
 
 EmitDelta = Callable[[task_pb2.TaskDelta], Awaitable[None]]
 
@@ -40,16 +54,17 @@ _ROLE_KINDS = (
 _MAX_EPISODES = 5
 
 # Memory 召回未接时的 demo 角色。召回结果优先于这里。
-_MAX_TOOL_ROUNDS = 6
-_MAX_ORCH_ROUNDS = 8
+# contracts §4：同一个图，最多 20 轮工具。同事在这一轮里跑完，也用这个上限。
+_MAX_TOOL_ROUNDS = 20
+_MAX_ORCH_ROUNDS = 20
 _OPEN_NUDGE = (
     "The project is still open. Call delegate, advance, write_report, write_deck, or ask_user. "
     "A plain reply does not finish the turn."
 )
-_DATA_TOOLS = {"web_search", "fetch_url", "edgar", "utc_time"}
+_DATA_TOOLS = {"web_search", "fetch_url", "edgar", "utc_time", "kg"}
 _DATA_NUDGE = (
     "You have not called a data tool. The skill text is already in your instructions. "
-    "Call utc_time, fetch_url, web_search, or edgar before you answer. "
+    "Call kg, utc_time, fetch_url, web_search, or edgar before you answer. "
     "A gap is allowed only after a tool result says the source is missing."
 )
 _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -77,7 +92,7 @@ class WorkerState(TypedDict, total=False):
     seq: int  # 已发出的 delta 序号；text chunk 与收尾帧共用一条序列
 
 
-def build_graph(model: ModelPort, emit: EmitDelta):
+def build_graph(model: ModelPort, emit: EmitDelta, nc=None):
     """构造编译后的图。emit 由 runner 注入（发布到 task.delta_subject）。"""
 
     held: dict = {}
@@ -109,6 +124,14 @@ def build_graph(model: ModelPort, emit: EmitDelta):
                 "skills": [name for name in (item.get("skills") or []) if name],
             })
         seeds = (project or {}).get("seeds") or []
+        sources: set[str] = set()
+
+        async def delegate_run(coworker: str, task_text: str, context: str) -> str:
+            fresh = load_project(gateway, task.swarm_id) or project
+            return await run_coworker(
+                model, nc, task, fresh, gateway, sources, coworker, task_text, context
+            )
+
         toolbox = make_toolbox(
             agent=agent,
             project_id=task.swarm_id,
@@ -117,8 +140,12 @@ def build_graph(model: ModelPort, emit: EmitDelta):
             mcp_tools=load_mcp_tools(root / "mcp.json"),
             gateway=gateway,
             seeds=seeds,
+            deliverable=(project or {}).get("deliverable"),
+            sources=sources,
+            delegate_run=delegate_run if (agent.get("kind") or "") == "ORCHESTRATOR" else None,
         )
         held["tools"] = toolbox
+        held["sources"] = sources
         held["roster"] = roster
         held["kind"] = agent.get("kind") or ""
         held["steps"] = steps
@@ -175,6 +202,7 @@ def build_graph(model: ModelPort, emit: EmitDelta):
                 calls = mention_delegates(text, held.get("roster") or [])
             if not calls and orch:
                 if _orch_can_stop(held):
+                    log.info("orch stop round=%s asked=%s", round_index + 1, bool(held.get("asked")))
                     text = _with_files(text, held)
                     break
                 if round_index == limit - 1:
@@ -199,6 +227,13 @@ def build_graph(model: ModelPort, emit: EmitDelta):
             used_tools = True
             notes: list[str] = []
             asked = ""
+            log.info(
+                "turn agent=%s round=%s/%s tools=%s",
+                task.agent_id,
+                round_index + 1,
+                limit,
+                ",".join(call.name for call in calls),
+            )
             for call in calls:
                 args = dict(call.arguments)
                 if call.name in {"delegate", "ledger"} and notes:
@@ -206,6 +241,7 @@ def build_graph(model: ModelPort, emit: EmitDelta):
                     args["context"] = (prior + "\n\n" + "\n\n".join(notes)).strip()
                 result = await toolbox.run(call.name, args)
                 _remember_progress(held, call.name, result)
+                held.setdefault("sources", set()).update(collect_urls(result))
                 if call.name in _DATA_TOOLS:
                     used_data = True
                 if call.name == "ask_user" and result.startswith("What I already have:"):
@@ -226,6 +262,7 @@ def build_graph(model: ModelPort, emit: EmitDelta):
                         extra: list[str] = []
                         for call in more:
                             result = await toolbox.run(call.name, dict(call.arguments))
+                            held.setdefault("sources", set()).update(collect_urls(result))
                             extra.append(f"{call.name} → {result}")
                         window.append(("", follow))
                         window.append(("tool", "\n\n".join(extra)))
@@ -380,6 +417,227 @@ def _cancelled(seq: int, usage) -> dict:
     return out
 
 
+async def run_coworker(model, nc, task, project, gateway, sources, coworker_name, task_text, context) -> str:
+    """同事在负责人这一次 task 里跑完。不另开 task，也不能再 delegate。"""
+    started = time.time()
+    name = (coworker_name or "").strip()
+    agent = _find_coworker(project, name)
+    if agent is None:
+        choices = ", ".join(
+            item.get("id") or "" for item in (project or {}).get("agents") or [] if item.get("id")
+        ) or "none"
+        return f"No coworker named {name}. Choices: {choices}"
+    if agent.get("id") == task.agent_id:
+        return "delegate cannot target the caller"
+    cid = agent.get("id") or name
+    log.info("delegate start coworker=%s", cid)
+    root = Path(os.environ.get("TERMITARIA_ROOT", os.getcwd()))
+    steps = (project or {}).get("steps") or []
+    own = {skill for skill in (agent.get("skills") or []) if skill}
+    loadable = [skill for skill in load_skills(root / "skills") if skill.name in own]
+    toolbox = make_toolbox(
+        agent=agent,
+        project_id=task.swarm_id,
+        steps=steps,
+        skills=loadable,
+        mcp_tools=load_mcp_tools(root / "mcp.json"),
+        gateway=gateway,
+        seeds=(project or {}).get("seeds") or [],
+        sources=sources,
+    )
+    recalled = await _recall(nc, cid, task_text, task.task_id)
+    knowledge = await _project_knowledge(task.swarm_id)
+    role = (agent.get("role_prompt") or "").strip() or f"You are {cid}."
+    parts = [role, "Finish the task yourself and return the result. You cannot delegate."]
+    facts = remembered_facts(recalled)
+    if facts:
+        parts.append(facts)
+    if knowledge and "no nodes yet" not in knowledge:
+        parts.append(knowledge)
+    system = "\n\n".join(parts)
+    user_text = (task_text or "").strip()
+    if (context or "").strip():
+        user_text += "\n\nContext:\n" + context.strip()
+    text, notes = await _coworker_loop(model, task, system, toolbox, sources, cid, user_text)
+    handoff = coworker_handoff(text, notes)
+    await publish_episode(
+        nc,
+        cid,
+        f"delegate:{task.task_id}:{cid}",
+        f"Delegated task:\n{task_text.strip()[:800]}\n\n{handoff[:3000]}",
+        task.task_id,
+    )
+    log.info("delegate done coworker=%s elapsed=%.1fs", cid, time.time() - started)
+    return handoff
+
+
+async def _coworker_loop(model, task, system, toolbox: Toolbox, sources: set, cid: str, user_text: str):
+    window = [("", user_text)]
+    notes: list[str] = []
+    text = ""
+    schemas = toolbox.schemas()
+    declared = _declared_tools(schemas)
+    used_tools = False
+    used_data = False
+    limit = _MAX_TOOL_ROUNDS
+    for round_index in range(limit):
+        if _deadline_exceeded(task.budget):
+            log.info("coworker %s deadline rounds=%s", cid, round_index)
+            return "Stopped because the deadline was reached.", notes
+        offer = schemas
+        if used_tools and round_index == limit - 1:
+            offer = None
+        try:
+            text, calls, _usage = await _complete(model, system, window, task, offer, declared)
+        except _Budget:
+            log.info("coworker %s deadline rounds=%s", cid, round_index)
+            return "Stopped because the deadline was reached.", notes
+        except Exception as exc:
+            log.info("coworker %s round=%s error=%s", cid, round_index + 1, exc)
+            return f"The coworker stopped: {exc}", notes
+        if (
+            not calls
+            and not used_data
+            and declared & _DATA_TOOLS
+            and round_index < 3
+        ):
+            window.append(("", text))
+            window.append(("tool", _DATA_NUDGE))
+            continue
+        if not calls:
+            log.info("coworker %s done rounds=%s", cid, round_index + 1)
+            return text or "Stopped after the tool results.", notes
+        used_tools = True
+        log.info(
+            "coworker %s round=%s/%s tools=%s",
+            cid,
+            round_index + 1,
+            limit,
+            ",".join(call.name for call in calls),
+        )
+        for call in calls:
+            result = await toolbox.run(call.name, dict(call.arguments))
+            if sources is not None:
+                sources.update(collect_urls(result))
+            if call.name in _DATA_TOOLS:
+                used_data = True
+            notes.append(f"{call.name} → {result}")
+        window.append(("", text))
+        window.append(("tool", "\n\n".join(notes)))
+    log.info("coworker %s hit max rounds=%s", cid, limit)
+    return text or "Stopped after the tool results.", notes
+
+
+def coworker_handoff(text: str, notes: list[str]) -> str:
+    """正文只留同事真正说的话。工具、步骤和文件只认这次跑过的记录。"""
+    spoken = []
+    for line in (text or "").splitlines():
+        if line.strip().lower().startswith("tool:"):
+            continue
+        spoken.append(line)
+    body = "\n".join(spoken).strip() or "The coworker returned no text."
+    steps = []
+    files = []
+    for note in notes:
+        if note.startswith("advance") and "was not applied" not in note and "advance requires" not in note:
+            for line in note.splitlines():
+                if " is now " in line:
+                    steps.append(line.strip())
+        if note.startswith("write_file"):
+            for line in note.splitlines():
+                if "Wrote " not in line:
+                    continue
+                path = line.split("Wrote ", 1)[1].split(" (", 1)[0].strip()
+                if path:
+                    files.append(path)
+    tool_text = "\n\n".join(notes) if notes else "none"
+    step_text = "\n".join(steps) if steps else "none"
+    file_text = "\n".join(files) if files else "none"
+    return (
+        f"{body}\n\nTools that ran:\n{tool_text}\n\n"
+        f"Steps changed:\n{step_text}\n\n"
+        f"Files written:\n{file_text}"
+    )
+
+
+def _find_coworker(project: dict | None, name: str) -> dict | None:
+    folded = (name or "").strip().lower()
+    if not folded:
+        return None
+    agents = (project or {}).get("agents") or []
+    for agent in agents:
+        if agent.get("id") == name or (agent.get("id") or "").lower() == folded:
+            return agent
+    for agent in agents:
+        if (agent.get("display_name") or "").lower() == folded:
+            return agent
+    for agent in agents:
+        display = (agent.get("display_name") or "").lower()
+        if folded in display:
+            return agent
+    return None
+
+
+async def _recall(nc, agent_id: str, query: str, trace_id: str):
+    if nc is None or not agent_id:
+        return []
+    from termitaria.memory.v1 import memory_pb2
+
+    req = memory_pb2.RecallRequest(
+        agent_id=agent_id,
+        query_text=(query or "")[:1000],
+        depth=memory_pb2.RECALL_DEPTH_AUTO,
+        top_k=5,
+    )
+    try:
+        msg = await nc.request("memory.recall", envelope.pack("langgraph-worker", trace_id, req), timeout=3)
+        _, resp = envelope.unpack(msg.data, memory_pb2.RecallResponse)
+        return list(resp.items)
+    except Exception as exc:
+        log.info("recall agent=%s failed: %s", agent_id, exc)
+        return []
+
+
+async def _project_knowledge(project_id: str) -> str:
+    if not project_id:
+        return ""
+    from services.graph.client import GraphClient
+    from .tools import _kg_read
+
+    client = GraphClient(os.environ.get("GRAPH_GRPC_ADDR", "localhost:50051"), timeout_s=8)
+    try:
+        return await _kg_read(client, project_id)
+    except Exception as exc:
+        log.info("coworker graph project=%s failed: %s", project_id, exc)
+        return ""
+    finally:
+        await client.close()
+
+
+async def publish_episode(nc, agent_id: str, session_id: str, summary: str, trace_id: str) -> None:
+    """delegate 不开会话，所以同事做完就写一条 episode。聊天会话关闭时仍由 distiller 再写一条。"""
+    summary = (summary or "").strip()
+    if nc is None or not agent_id or not summary:
+        return
+    from termitaria.memory.v1 import memory_pb2
+
+    episode = memory_pb2.Episode(
+        agent_id=agent_id,
+        session_id=session_id or "none",
+        summary=summary[:4000],
+        occurred_at_ms=envelope.now_ms(),
+    )
+    episode.salient_spans.append(summary[:800])
+    try:
+        await nc.jetstream().publish(
+            "memory.write.episode",
+            envelope.pack("langgraph-worker", trace_id, memory_pb2.WriteEpisodeRequest(episode=episode)),
+        )
+        log.info("episode queued agent=%s session=%s", agent_id, session_id)
+    except Exception:
+        log.exception("episode publish agent=%s", agent_id)
+
+
 def remembered_facts(items, limit: int = _MAX_EPISODES) -> str:
     lines = []
     for item in items:
@@ -393,7 +651,13 @@ def remembered_facts(items, limit: int = _MAX_EPISODES) -> str:
             break
     if not lines:
         return ""
-    return "Remembered facts:\n" + "\n".join(f"- {line}" for line in lines)
+    body = "\n".join(f"- {line}" for line in lines)
+    return (
+        "Your memory (episodes only you can see). "
+        "When the user asks what you remember or what you already proposed, quote these. "
+        "Do not say that you have no memory while this list is present.\n"
+        + body
+    )
 
 
 def _system(role: str, rules: str, skills, toolbox: Toolbox, roster: list[dict], steps: list, materials: str = "") -> str:
@@ -489,6 +753,15 @@ def _forced_ask(held: dict, window: list[tuple[str, str]]) -> str:
         if step.get("state") == "active":
             active = step.get("label") or active
             break
+    if "write_report" in known and (
+        "too short" in known or "missing the section" in known or "needs a link" in known
+    ):
+        reason = known if len(known) <= 300 else known[:300]
+        return (
+            f"What I already have:\n{known}\n\n"
+            f"Question:\nThe step \"{active}\" is still open because {reason} "
+            "Should I revise the report to satisfy that check and store it again?"
+        )
     return (
         f"What I already have:\n{known}\n\n"
         f"Question:\nThe step \"{active}\" is still open. "

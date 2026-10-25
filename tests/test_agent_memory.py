@@ -61,5 +61,9 @@ def test_recall_stays_inside_one_agent():
             )
         )
         assert empty == ""
+        view = await backend.graph_view("researcher")
+        summaries = [node["summary"] for node in view["nodes"]]
+        assert any("4.80" in summary for summary in summaries)
+        assert all("critic" not in (node.get("summary") or "") for node in view["nodes"])
 
     asyncio.run(run())

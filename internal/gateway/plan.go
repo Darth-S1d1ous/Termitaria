@@ -34,7 +34,14 @@ func planLabels(goal string) []string {
 	raw = strings.NewReplacer("→", "\n", "->", "\n", "；", "\n", ";", "\n", "。", "\n").Replace(raw)
 	var out []string
 	for _, line := range strings.Split(raw, "\n") {
-		line = strings.Trim(strings.TrimSpace(line), "，,、:： ")
+		line = strings.Trim(strings.TrimSpace(line), "，,、:：.。 ")
+		// 箭头链最后一截常带着整句的尾巴，例如 "methods review, all written into the knowledge graph"。
+		if comma := strings.IndexAny(line, "，,"); comma > 0 {
+			head := strings.Trim(strings.TrimSpace(line[:comma]), "，,、:：.。 ")
+			if head != "" {
+				line = head
+			}
+		}
 		if line == "" {
 			continue
 		}
@@ -139,9 +146,9 @@ func (s *Server) updateStep(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		next := applyStep(p.Steps, idx, state)
-		if allDone(next) && !deliverablesReady(p.Artifacts) {
+		if allDone(next) && !deliverablesReady(p) {
 			s.mu.Unlock()
-			writeError(w, 409, "the project stays open until a report and a deck are stored")
+			writeError(w, 409, openReason(p))
 			return
 		}
 		p.Steps = next
@@ -180,6 +187,13 @@ func applyStep(steps []stepJSON, idx int, state string) []stepJSON {
 		}
 	}
 	return next
+}
+
+func openReason(p *projectJSON) string {
+	if p != nil && p.Deliverable != nil && !p.Deliverable.RequireDeck {
+		return "the project stays open until the report is stored"
+	}
+	return "the project stays open until a report and a deck are stored"
 }
 
 func allDone(steps []stepJSON) bool {

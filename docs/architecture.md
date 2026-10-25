@@ -119,8 +119,8 @@
 - 图按 project 建。这个 project 里的 agent 都能读这张图。另一个 project 的 agent 不能读。图不按 agent 切开。
 - Agent Memory 按 `agent_id` 建。召回只返回这一个 agent 的条目。不返回别的 agent 的条目，也不返回图上的节点。
 - Qdrant 只存这个 agent 的 episode 向量。
-- 文件的作者、年份、摘要写在节点 `props` 里。正文留在对象存储，不进总线。
-- Ingest 是图的唯一写路径：chunk → embed → 抽 claim / citation → 写入这张 project 图。文档不进任何 agent 的记忆。
+- 文件的作者、年份、摘要写在节点 `props` 里。
+- 图有两条写路径。ingest 消费 `memory.write.document`。worker 的 `kg` 工具把一段文字交给 Graphiti，并等到抽取结束。边由 Graphiti 抽取，调用方传来的边不写入。
 
 ### 5.2 两个服务各自的 API
 
@@ -133,9 +133,9 @@
 **Knowledge Graph Service**（只碰这个 project 的图）：
 
 - `QuerySubgraph(seed_node_ids, depth)` → 从这个 project 的图上取子图。
-- ingest 消费 `memory.write.document`，把文档 upsert 成节点和边。`WriteDocument` 的消息定义在 `memory.proto`，消费方是 KG ingest，不是 agent 记忆。
+- ingest 消费 `memory.write.document`，把文档交给 Graphiti。worker 的 `kg` 工具是另一条写路径，也把一段文字交给 Graphiti。`WriteDocument` 的消息定义在 `memory.proto`，消费方是 KG ingest，不是 agent 记忆。
 
-dispatcher 在入队前分别调用上面两个读接口，结果放进 `TaskContext.recalled` 和 `TaskContext.graph_node_ids`。worker 只读这份上下文。
+dispatcher 在入队前分别调用上面两个读接口，结果放进 `TaskContext.recalled` 和 `TaskContext.graph_node_ids`。worker 还可以在推理中再调 `kg`。
 
 ---
 
@@ -149,7 +149,7 @@ dispatcher 在入队前分别调用上面两个读接口，结果放进 `TaskCon
 | --- | --- | --- | --- | --- |
 | 用户 → 单 agent 问答 | 路由 ~1–5 ms | 50–200 ms | 流式 | **首 token 0.3–1 s** / 完成 2–8 s |
 | agent ↔ agent 一轮 session | 开/路由 session ~5–20 ms | 每侧 50–200 ms | 每侧一次推理 | **一轮 3–15 s** |
-| 文档入库 → KG 可查 | — | — | 抽取 1–5 s | **2–10 s**（异步，不阻塞聊天） |
+| 文档入库 → KG 可查 | — | — | Graphiti 抽取，常为数十秒 | **等待抽取结束**。聊天不阻塞在这条写入上 |
 | 记忆召回 | — | 50–200 ms | — | **50–200 ms** |
 | swarm 冷启动（5 agent） | 调度 + 拉起 supervisor 100–500 ms | 预热记忆 200–800 ms | — | **0.5–2 s** |
 

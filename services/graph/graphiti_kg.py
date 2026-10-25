@@ -84,13 +84,12 @@ class IdleKnowledge:
         del name, text
         log.error("graphiti is not configured, document not extracted project=%s", project)
 
-    def note(self, project: str, name: str, text: str) -> None:
-        task = asyncio.create_task(self.add_text(project, name, text))
-        task.add_done_callback(_log_task)
-
     async def subgraph(self, project: str) -> graph_pb2.QuerySubgraphResponse:
         del project
         return graph_pb2.QuerySubgraphResponse()
+
+    async def close(self) -> None:
+        return
 
 
 class GraphitiKnowledge:
@@ -99,14 +98,21 @@ class GraphitiKnowledge:
         self._driver = driver
         self._lock = asyncio.Lock()
         self._ready = False
-        self._pending: set[asyncio.Task] = set()
 
     async def open(self) -> None:
         async with self._lock:
             if self._ready:
                 return
-            await self._graphiti.build_indices_and_constraints()
+            await self._driver.health_check()
             self._ready = True
+
+    async def close(self) -> None:
+        await self._driver.close()
+
+    async def _use(self, project: str):
+        driver = self._driver.clone(database=group_id(project))
+        await driver.ensure_database_initialized()
+        return driver
 
     async def add_text(self, project: str, name: str, text: str) -> None:
         body = text.strip()
@@ -116,6 +122,7 @@ class GraphitiKnowledge:
 
         await self.open()
         async with self._lock:
+            await self._use(project)
             await self._graphiti.add_episode(
                 name=name or project,
                 episode_body=body,
@@ -126,17 +133,11 @@ class GraphitiKnowledge:
                 update_communities=False,
             )
 
-    def note(self, project: str, name: str, text: str) -> None:
-        task = asyncio.create_task(self.add_text(project, name, text))
-        self._pending.add(task)
-        task.add_done_callback(self._pending.discard)
-        task.add_done_callback(_log_task)
-
     async def subgraph(self, project: str) -> graph_pb2.QuerySubgraphResponse:
         if not project:
             return graph_pb2.QuerySubgraphResponse()
-        driver = self._driver.clone(database=group_id(project))
         try:
+            driver = await self._use(project)
             node_raw = await driver.execute_query(
                 "MATCH (n:Entity) RETURN n.uuid AS id, n.name AS name, n.summary AS summary LIMIT 80"
             )
@@ -159,14 +160,6 @@ def _rows(raw) -> list[dict]:
     if not isinstance(rows, list):
         return []
     return [row for row in rows if isinstance(row, dict)]
-
-
-def _log_task(task: asyncio.Task) -> None:
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        log.error("graphiti extract failed: %s", exc)
 
 
 def node_text(node: graph_pb2.Node) -> str:
@@ -199,21 +192,22 @@ def open_graphiti(host: str, port: int):
         return IdleKnowledge()
     try:
         from graphiti_core import Graphiti
-        from graphiti_core.driver.falkordb_driver import FalkorDriver
         from graphiti_core.llm_client.config import LLMConfig
 
+        from services.graph.falkor import MAX_COROUTINES, open_driver
         from services.memory.graphiti_backend import _cross_encoder, _llm_client, _local_embedder
     except Exception:
         log.exception("graphiti import failed")
         return IdleKnowledge()
     os.environ["EMBEDDING_DIM"] = "384"
     llm_config = LLMConfig(api_key=key, model=model, small_model=model, base_url=base)
-    driver = FalkorDriver(host=host, port=port)
+    driver = open_driver(host, port)
     graphiti = Graphiti(
         graph_driver=driver,
         llm_client=_llm_client(llm_config),
         embedder=_local_embedder(os.environ.get("MEMORY_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")),
         cross_encoder=_cross_encoder(llm_config),
+        max_coroutines=MAX_COROUTINES,
     )
     log.info("graph store: graphiti falkordb %s:%s model=%s", host, port, model)
     return GraphitiKnowledge(graphiti, driver)

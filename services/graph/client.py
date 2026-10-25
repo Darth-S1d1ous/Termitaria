@@ -1,4 +1,8 @@
-"""worker 用的薄客户端（P2 接线）。KG 不可达时返回空子图，不抛错。"""
+"""worker 调用 KnowledgeGraphService 的客户端。
+
+默认的 query_subgraph 在超时时返回空子图。strict=True 时把错误抛给调用方。
+kg 工具写入用更长的超时，因为要等 Graphiti 抽完。
+"""
 from __future__ import annotations
 
 import logging

@@ -11,7 +11,7 @@ from termitaria.session.v1 import session_pb2
 from termitaria.task.v1 import task_pb2
 
 from . import envelope
-from .graph import build_graph
+from .graph import build_graph, publish_episode
 from .model import ModelPort
 
 
@@ -28,8 +28,12 @@ class TaskRunner:
                 task.delta_subject, envelope.pack(self._producer, trace_id, delta)
             )
 
-        graph = build_graph(self._model, emit)
+        graph = build_graph(self._model, emit, self._nc)
         state = await graph.ainvoke({"task": task, "seq": 0, "text": "", "cancelled": False})
+        err = state.get("error")
+        text = state.get("text") or ""
+        if text and not state.get("cancelled") and not (err is not None and err.code):
+            await publish_episode(self._nc, task.agent_id, task.session_id, text, trace_id)
 
         result = self._build_result(task, state)
         # result subject 在 Task 契约里没有字段，按 internal/bus/subjects.go 的分类法推导

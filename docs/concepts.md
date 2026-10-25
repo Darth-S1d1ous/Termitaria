@@ -172,9 +172,10 @@ Graphiti reads the document text and extracts entities. Each edge has the
 name Graphiti chose and one fact sentence. The source file body stays in
 object storage (`content_ref`) and does not ride the bus.
 
-Reads are `QuerySubgraph` for that project. Writers send text: the ingest
-pipeline for uploaded documents, and the worker `kg` tool for a note. Graphiti
-does the extraction.
+Reads are `QuerySubgraph` for that project. Two writers send text onto
+`memory.write.document`. The ingest pipeline extracts one episode at a time.
+The worker `kg` tool queues a note and returns. A query in that same turn
+can miss the new entities. An edge supplied by the caller is not stored.
 
 ### Agent Memory (one store per agent)
 
@@ -214,10 +215,9 @@ collects seed node ids for **this project** and puts them on
 ### Document and the ingest pipeline
 
 A `Document` is published on `memory.write.document`. The Knowledge Graph
-ingest pipeline consumes it: chunk, embed, extract claims and citations,
-then upsert nodes and edges into **this project's** graph. Ingest is
-asynchronous (2–10 s) and does not block chat. The document is not written
-into any agent's memory.
+ingest pipeline consumes it and waits for Graphiti to extract entities and
+relations into **this project's** graph. Extraction often takes longer than
+ten seconds. The document is not written into any agent's memory.
 
 ### MemoryPolicy
 

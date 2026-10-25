@@ -8,6 +8,9 @@ goal: |
   Track the copper market and produce one reviewed trading brief.
   Price the last full week → explain the move with sources → publish the report and the deck
 
+deliverable:
+  kind: brief
+
 agents:
   - id: desk
     kind: ORCHESTRATOR
@@ -33,7 +36,7 @@ agents:
   - id: critic
     displayName: Reviewer
     rolePrompt: |
-      You reject any number that has no source in the task you were given.
-      You do not search and you do not rewrite the brief. Say what to keep and what to drop.
+      You reject any number that is not in the task or under Tools that ran.
+      You do not rewrite the brief. Say what to keep and what to drop.
     tools: [kg_query]
     budget: { maxTokens: 4096 }

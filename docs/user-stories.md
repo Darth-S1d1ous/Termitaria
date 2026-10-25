@@ -121,8 +121,8 @@
 **So that** 之后任何 agent 都能引用它，知识不会沉在聊天记录里。
 
 验收标准：
-- 上传后 2–10 s 内 KG 可查（异步，不阻塞聊天）。
-- 节点写入这个 project 的图，种类含 `DOCUMENT` 与 `CLAIM`，边含 cites / derives / depends。
+- 上传后 KG 可查要等到 Graphiti 抽取结束。这常为数十秒，不阻塞用户那条聊天。
+- 节点写入这个 project 的图。实体和关系的名字由 Graphiti 决定，不保证是 `DOCUMENT` / `CLAIM` 或 cites / derives / depends。
 - 文档不进入任何一个 agent 的记忆库。
 - 对应 SRS：FR-C6、FR-P2、FR-P3。
 

@@ -36,7 +36,6 @@ else
   docker compose up -d nats qdrant falkordb postgres
 fi
 export MEMORY_BACKEND="${MEMORY_BACKEND:-agent}"
-export GRAPH_CANNED="${GRAPH_CANNED:-0}"
 
 for _ in $(seq 1 30); do
   if curl -sf http://127.0.0.1:8222/healthz >/dev/null; then

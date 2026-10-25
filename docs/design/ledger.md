@@ -1,6 +1,7 @@
 # 项目台账 Ledger（设计理由）
 
-> 契约本体见 `proto/termitaria/project/v1/project.proto` 与 `docs/contracts.md` §4。
+> 契约本体见 `proto/termitaria/project/v1/project.proto`。
+> 当前运行的代码还没有这条事件流。SwarmSpec 里的 `ledger` 工具名是 `advance` 的别名，只改项目步骤。同事的结果由 `delegate` 的工具返回交回，不经 spoke session。
 
 ## 是什么
 

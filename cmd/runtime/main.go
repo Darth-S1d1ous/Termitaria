@@ -133,6 +133,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("gateway state: %v", err)
 		}
+		d.SetSkipSpeaker(gw.SkipSpokeCaller)
 		if err := gw.Start(ctx, b); err != nil {
 			log.Fatalf("gateway subscribe: %v", err)
 		}

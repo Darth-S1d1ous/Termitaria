@@ -74,14 +74,21 @@ class Ingestor:
             log.info("duplicate event_id=%s, ack", env.event_id)
             await msg.ack()
             return
-        node_id = await self._ingest(req.document, env.trace_id)
+        extracted = await self._ingest(req.document, env.trace_id)
         self._spool(env, req)
         self._seen.add(env.event_id)
-        self.ingested.append(node_id)
         await msg.ack()
-        log.info("ingested doc=%s → %s (trace=%s)", req.document.doc_id, node_id, env.trace_id)
+        if not extracted:
+            return
+        self.ingested.append(req.document.doc_id)
+        log.info(
+            "ingested doc=%s → %s (trace=%s)",
+            req.document.doc_id,
+            req.document.doc_id,
+            env.trace_id,
+        )
 
-    async def _ingest(self, doc: memory_pb2.Document, trace_id: str) -> str:
+    async def _ingest(self, doc: memory_pb2.Document, trace_id: str) -> bool:
         log.info("ingest doc=%s trace=%s", doc.doc_id, trace_id)
         project = project_of(doc.doc_id) or "default"
         text = document_body(doc)
@@ -89,7 +96,8 @@ class Ingestor:
             await self._engine.add_text(project, doc.title or doc.doc_id, text)
         except Exception:
             log.exception("graphiti extract failed doc=%s", doc.doc_id)
-        return doc.doc_id
+            return False
+        return True
 
     def _spool(self, env, req: memory_pb2.WriteDocumentRequest) -> None:
         line = {

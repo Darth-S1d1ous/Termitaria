@@ -22,6 +22,18 @@ func TestPlanLabelsFollowTheGoal(t *testing.T) {
 	}
 }
 
+func TestPlanLabelsDropTheSentenceTail(t *testing.T) {
+	goal := "Given the user's library, produce a plan:\nliterature gap scan → hypothesis → experiment design → methods review, all written into the knowledge graph."
+	got := planLabels(goal)
+	if strings.Join(got, "|") != "literature gap scan|hypothesis|experiment design|methods review" {
+		t.Fatalf("labels = %#v", got)
+	}
+	text := planText(newPlan(goal))
+	if strings.Contains(text, "..") {
+		t.Fatalf("text = %s", text)
+	}
+}
+
 func TestBudgetOrTimeout(t *testing.T) {
 	if !budgetOrTimeout(taskv1.TaskStatus_TASK_STATUS_CANCELLED, "") {
 		t.Fatal("cancelled should fail the active step")

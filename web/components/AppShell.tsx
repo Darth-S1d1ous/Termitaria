@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import {
   artifactURL,
   createProject,
@@ -28,7 +28,6 @@ import {
   PinIcon,
   PlusIcon,
   ReportFileIcon,
-  SearchIcon,
   SendIcon,
   TrashIcon,
 } from "./icons";
@@ -75,7 +74,6 @@ export function AppShell() {
   const [draft, setDraft] = useState("");
   const [specs, setSpecs] = useState<SwarmSpecDoc[]>([]);
   const [seeds, setSeeds] = useState<Seed[]>([]);
-  const [query, setQuery] = useState("");
   const [waiting, setWaiting] = useState<Record<string, boolean>>({});
   const [presence, setPresence] = useState<Record<string, string>>({});
   const [edges, setEdges] = useState<MeshEdge[]>([]);
@@ -98,11 +96,6 @@ export function AppShell() {
 
   const project = projects.find((item) => item.id === projectId) ?? null;
   const chat = chats.find((item) => item.id === chatId) ?? null;
-  const visibleChats = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return chats;
-    return chats.filter((item) => item.title.toLowerCase().includes(needle));
-  }, [chats, query]);
 
   useEffect(() => {
     const rawWidth = localStorage.getItem(LIST_WIDTH_KEY);
@@ -177,7 +170,6 @@ export function AppShell() {
     let cancel = false;
     setChatId(null);
     setMessages([]);
-    setQuery("");
     setConfirmDelete(false);
     setMention(null);
     setFocusSession(null);
@@ -538,7 +530,6 @@ export function AppShell() {
               <>
                 <div className="pane-title">
                   <h1>{project?.name ?? (booting ? "Loading" : "Termitaria")}</h1>
-                  {project?.goal ? <p>{project.goal}</p> : null}
                 </div>
                 {project ? (
                   <button className="icon-btn" type="button" aria-label="Delete project" onClick={() => setConfirmDelete(true)}>
@@ -549,18 +540,9 @@ export function AppShell() {
             )}
           </header>
           <ProjectPaneSwitch pane={projectPane} onChange={setProjectPane} />
-          <label className="search">
-            <SearchIcon />
-            <input
-              value={query}
-              placeholder="Search"
-              aria-label="Search"
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </label>
           {error && !chat ? <p className="banner">{error}</p> : null}
           <div className="rows">
-            {visibleChats.map((item) => (
+            {chats.map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -656,7 +638,7 @@ export function AppShell() {
           <header className="pane-header">
             <div className="pane-title">
               <h1>Memory Inspector</h1>
-              <p>The graph database is not connected. This list only shows material added when the project was created.</p>
+              <p>Initial material for this project. The knowledge graph is on the Knowledge tab.</p>
             </div>
           </header>
           <ul className="seed-list">

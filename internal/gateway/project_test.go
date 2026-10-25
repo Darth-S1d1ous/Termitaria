@@ -328,6 +328,35 @@ func TestCreateKeepsSeedsAndRejectsUnknownSkill(t *testing.T) {
 	bad.Body.Close()
 }
 
+func TestReportRubricRejectsAMissingSection(t *testing.T) {
+	srv, _ := testServer(t)
+	httpSrv := httptest.NewServer(srv.Handler())
+	t.Cleanup(httpSrv.Close)
+	spec := "name: paperlab\ngoal: write the paper\ndeliverable:\n  kind: paper\nagents:\n  - id: pi\n    kind: ORCHESTRATOR\n    rolePrompt: lead\n  - id: hand\n    rolePrompt: hand\n"
+	res := postJSON(t, httpSrv.URL+"/api/projects", map[string]string{"name": "Paper", "spec": spec})
+	if res.StatusCode != 201 {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("create status = %d %s", res.StatusCode, body)
+	}
+	var created projectJSON
+	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if created.Deliverable == nil || created.Deliverable.Kind != "paper" || created.Deliverable.RequireDeck {
+		t.Fatalf("deliverable = %+v", created.Deliverable)
+	}
+	res = postJSON(t, httpSrv.URL+"/api/projects/"+created.ID+"/artifacts", map[string]string{
+		"name": "paper.md", "kind": "report",
+		"content_base64": base64.StdEncoding.EncodeToString([]byte("## Abstract\n\n" + strings.Repeat("A claim without a source. ", 40))),
+	})
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 400 || !strings.Contains(string(body), "Related work") {
+		t.Fatalf("status = %d %s", res.StatusCode, body)
+	}
+}
+
 func postArtifact(t *testing.T, base, projectID, name, kind string, raw []byte) {
 	t.Helper()
 	res := postJSON(t, base+"/api/projects/"+projectID+"/artifacts", map[string]string{
@@ -338,6 +367,25 @@ func postArtifact(t *testing.T, base, projectID, name, kind string, raw []byte) 
 		t.Fatalf("artifact %s status = %d %s", name, res.StatusCode, body)
 	}
 	res.Body.Close()
+}
+
+func TestReplyTimeoutLeavesTheStepActive(t *testing.T) {
+	srv, _ := testServer(t)
+	httpSrv := httptest.NewServer(srv.Handler())
+	t.Cleanup(httpSrv.Close)
+	created := createField(t, httpSrv.URL)
+	res := postJSON(t, httpSrv.URL+"/api/projects/"+created.ID+"/chats/pi/messages", map[string]string{
+		"text": "开始扫文献",
+	})
+	if res.StatusCode != 504 {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("status = %d %s", res.StatusCode, body)
+	}
+	res.Body.Close()
+	project := projectByID(t, httpSrv.URL, created.ID)
+	if len(project.Steps) != 1 || project.Steps[0].State != "active" {
+		t.Fatalf("steps = %+v", project.Steps)
+	}
 }
 
 func TestDelegateOpensSessionThenTimesOut(t *testing.T) {
@@ -373,6 +421,14 @@ func TestDelegateOpensSessionThenTimesOut(t *testing.T) {
 	}
 	if !saw {
 		t.Fatal("delegate did not open a spoke")
+	}
+	for _, sess := range list {
+		if sess.GetPolicy().GetMaxTurns() != 0 {
+			t.Fatalf("max turns = %d, want unlimited", sess.GetPolicy().GetMaxTurns())
+		}
+		if sess.GetState() != sessionv1.SessionState_SESSION_STATE_OPEN {
+			t.Fatalf("state = %s, want open", sess.GetState())
+		}
 	}
 }
 

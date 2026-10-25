@@ -37,12 +37,15 @@ def test_subgraph_uses_graphiti_names_and_facts():
     assert resp.edges[0].fact.startswith("Northwire priced")
 
 
-def test_upsert_sends_text_to_graphiti_and_query_reads_that_project():
+def test_upsert_queues_a_document_and_query_reads_that_project():
+    from services.common import envelope
+    from termitaria.memory.v1 import memory_pb2
+
     class Engine:
         def __init__(self):
             self.notes = []
 
-        def note(self, project, name, text):
+        async def add_text(self, project, name, text):
             self.notes.append((project, name, text))
 
         async def subgraph(self, project):
@@ -52,8 +55,16 @@ def test_upsert_sends_text_to_graphiti_and_query_reads_that_project():
                 [],
             )
 
+    class JS:
+        def __init__(self):
+            self.sent = []
+
+        async def publish(self, subject, payload):
+            self.sent.append((subject, payload))
+
     engine = Engine()
-    servicer = KnowledgeGraphServicer(engine)
+    js = JS()
+    servicer = KnowledgeGraphServicer(engine, js)
     node = graph_pb2.Node(node_id="p_desk/claim_1", title="Radar carrier", kind=graph_pb2.NODE_KIND_CLAIM)
     node.props.update({"text": "The carrier is 77 GHz."})
 
@@ -66,5 +77,11 @@ def test_upsert_sends_text_to_graphiti_and_query_reads_that_project():
         return resp
 
     resp = asyncio.run(run())
-    assert engine.notes == [("p_desk", "Radar carrier", "The carrier is 77 GHz.")]
+    assert engine.notes == []
+    subject, payload = js.sent[0]
+    assert subject == "memory.write.document"
+    _, req = envelope.unpack(payload, memory_pb2.WriteDocumentRequest)
+    assert req.document.doc_id == "p_desk/claim_1"
+    assert req.document.title == "Radar carrier"
+    assert req.document.content_ref == "The carrier is 77 GHz."
     assert resp.nodes[0].title == "Northwire"

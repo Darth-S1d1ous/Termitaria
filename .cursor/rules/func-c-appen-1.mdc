@@ -1,7 +1,0 @@
----
-alwaysApply: true
----
-
-func (c appendCmd) apply(a *Actor) {
-	msg, err := a.append(context.Background(), c)
-	c.result <- appendResult{msg, err}

@@ -1,4 +1,7 @@
-"""技能目录。做法对齐 CrewAI：提示里只放名字和一句话，全文等 load_skill 再给。"""
+"""技能目录。
+
+绑在这个 agent 上的技能，全文直接放进 system prompt。load_skill 仍可再取一次全文。
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

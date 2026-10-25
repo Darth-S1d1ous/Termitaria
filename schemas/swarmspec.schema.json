@@ -29,10 +29,33 @@
       "maxContains": 1,
       "items": { "$ref": "#/$defs/agent" }
     },
+    "deliverable": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "成稿验收。创建项目时编译进项目，之后不变。kind 省略 sections 时用内置的 paper 或 brief 模板。",
+      "properties": {
+        "kind": { "enum": ["paper", "brief"] },
+        "minChars": { "type": "integer", "minimum": 1 },
+        "requireDeck": { "type": "boolean" },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["heading"],
+            "additionalProperties": false,
+            "properties": {
+              "heading": { "type": "string", "minLength": 1 },
+              "minChars": { "type": "integer", "minimum": 1 },
+              "citations": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
     "edges": {
       "type": "array",
       "default": [],
-      "description": "worker 之间的受控直连通道（opt-in）；orchestrator↔worker 的 spoke 隐式存在，无需声明",
+      "description": "声明用的 worker 边。当前 delegate 不按这些边开会话。只有负责人能派活，同事在负责人这次 task 里执行。",
       "items": { "$ref": "#/$defs/edge" }
     },
     "topology": { "$ref": "#/$defs/topology", "default": {} },
@@ -57,13 +80,13 @@
           "type": "array",
           "items": { "type": "string" },
           "default": [],
-          "description": "工具 ACL 白名单，Policy 组件在运行时执行"
+          "description": "额外工具名。worker 总会再加上 web_search、fetch_url、utc_time、write_file。delegate 只有 ORCHESTRATOR 有，写在 worker 的列表里也会被拿掉。"
         },
         "skills": {
           "type": "array",
           "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
           "default": [],
-          "description": "这个 agent 可以 load_skill 的技能名，对应 skills/*.md。未列出的技能不会进它的提示。"
+          "description": "绑在这个 agent 上的技能。全文放进它的 system prompt。负责人还能看到其他 agent 的技能名，用来在 delegate 里点名。"
         },
         "memory": { "$ref": "#/$defs/memoryPolicy" },
         "budget": { "$ref": "#/$defs/budget" }

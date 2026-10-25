@@ -1,5 +1,6 @@
 .DS_Store
 .vscode/
+.cursor/
 
 # buf generate
 gen/
@@ -27,10 +28,17 @@ var/
 # local client state (projects and user-visible chats)
 data/
 
-# Tesla brief runs (spec and generated report)
+# Concrete case runs and research drafts. Do not publish.
 examples/tsla/
+# Repo-root writeups: protocols, hypotheses, reviews. README.md stays tracked.
+/*.md
+!/README.md
+/protocol/
+/literature/
+
+# Local build output and scratch scripts. Source for the binary is cmd/natsdev.
+/natsdev
+/recall_check.py
 
 crewAI
 loop_mem_benchmark
-
-my_notes.md

@@ -1,13 +1,14 @@
 """工具。模型用一行 JSON 调用，跑完把结果塞回窗口，再决定要不要继续。
 
 形状靠近 CrewAI 的 BaseTool：名字、一句话说明、一份参数、一次执行。
-delegate 对应 CrewAI 的 Delegate work to coworker，只是同事跑在另一条 session 上。
+delegate 对应 CrewAI 的 Delegate work to coworker：负责人在这一次执行里调用同事，同事不能再派活。
 """
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -28,6 +29,8 @@ from .skills import Skill
 
 Runner = Callable[[dict], Awaitable[str]]
 
+log = logging.getLogger(__name__)
+
 _ALIASES = {
     "ledger": "advance",
     "plan": "advance",
@@ -35,6 +38,12 @@ _ALIASES = {
     "search": "web_search",
     "fetch": "fetch_url",
 }
+
+# 子模型始终带着这套工具。SwarmSpec 的 tools 只能再加，不能把这套拿掉。
+# delegate 不在里面。只有负责人能派活。
+_WORKER_BASE = ("web_search", "fetch_url", "utc_time", "write_file")
+_URL_RE = re.compile(r"https?://[^\s<>\"]+")
+_HEADING_RE = re.compile(r"^#{1,3}\s+(.+?)\s*$")
 
 
 @dataclass
@@ -71,10 +80,11 @@ class Toolbox:
         ]
         if "ask_user" in self.tools:
             lines.append(
-                "While a step is active, call delegate, advance, write_report, write_deck, or ask_user. A plain reply does not finish the turn."
+                "While a step is active, call delegate, advance, write_report, or ask_user. "
+                "Call write_deck too when the report tool says a deck is required. A plain reply does not finish the turn."
             )
             lines.append(
-                "ask_user needs known and question. write_report and write_deck must be stored before the last step can turn done."
+                "ask_user needs known and question. write_report must be stored before the last step can turn done."
             )
         for tool in self.tools.values():
             lines.append(f"- {tool.name}: {tool.description}")
@@ -198,6 +208,9 @@ def make_toolbox(
     mcp_tools: list[MCPTool],
     gateway: str,
     seeds: list | None = None,
+    deliverable: dict | None = None,
+    sources: set | None = None,
+    delegate_run: Callable[[str, str, str], Awaitable[str]] | None = None,
 ) -> Toolbox:
     listed = [item for item in (agent.get("tools") or []) if item]
     names = set(listed)
@@ -207,10 +220,13 @@ def make_toolbox(
             names.update(["delegate", "advance"])
         else:
             names.update(["web_search", "fetch_url", "write_file"])
+    if kind != "ORCHESTRATOR":
+        names.update(_WORKER_BASE)
+        names.discard("delegate")
     if "web_search" in names:
         names.add("fetch_url")
         names.add("utc_time")
-    if kind == "ORCHESTRATOR" or "delegate" in names or "ledger" in names:
+    if kind == "ORCHESTRATOR" or "ledger" in listed:
         names.update(["delegate", "advance"])
     if kind == "ORCHESTRATOR":
         names.update(["ask_user", "write_report", "write_deck"])
@@ -226,9 +242,15 @@ def make_toolbox(
     if "fetch_url" in names:
         tools.append(Tool(
             "fetch_url",
-            "Open url and return the page text. PDFs are extracted when possible.",
+            "Open url. For an arXiv paper or a PDF, the body is split into sections. "
+            "Pass section to read one heading, such as Datasets. "
+            "Without section, the tool returns the section list and the first section. "
+            "If the body was not extracted, the result says the paper was not read.",
             _fetch_url,
-            {"url": {"type": "string", "description": "http or https URL"}},
+            {
+                "url": {"type": "string", "description": "http or https URL"},
+                "section": {"type": "string", "description": "heading to read, for a paper"},
+            },
             ["url"],
         ))
     if "utc_time" in names:
@@ -252,13 +274,14 @@ def make_toolbox(
             },
             ["path", "content"],
         ))
-    if "delegate" in names:
+    if kind == "ORCHESTRATOR" and "delegate" in names:
         tools.append(
             Tool(
                 "delegate",
                 "Give a task to a coworker. coworker is an id or display name, task is what to do, and context is material you already have. "
-                "The coworker finishes in their own session and the result comes back here.",
-                _delegate(gateway, project_id, agent.get("id") or "", materials_text(seeds)),
+                "The coworker runs now, in this turn, and cannot delegate. "
+                "The reply lists Tools that ran, Steps changed, and Files written. Only those lines record what happened.",
+                _delegate(delegate_run, materials_text(seeds)),
                 {
                     "coworker": {"type": "string", "description": "coworker id or display name"},
                     "task": {"type": "string"},
@@ -274,7 +297,7 @@ def make_toolbox(
             Tool(
                 "advance",
                 hint + "Arguments are label and state (pending, active, done, failed). "
-                "The gateway keeps the last step open until a report and a deck are stored.",
+                "The gateway keeps the last step open until the report is stored, and until a deck is stored when the project requires one.",
                 _plan(gateway, project_id),
                 {
                     "label": {"type": "string"},
@@ -300,17 +323,17 @@ def make_toolbox(
         tools.append(
             Tool(
                 "write_report",
-                "Store the trading brief on the project. Fill what_moved, why, watch, and sources. Each section needs a full sentence and a source.",
-                _write_report(gateway, project_id),
+                _report_description(deliverable),
+                _write_report(gateway, project_id, deliverable, sources),
                 {
                     "name": {"type": "string"},
                     "title": {"type": "string"},
-                    "what_moved": {"type": "string"},
-                    "why": {"type": "string"},
-                    "watch": {"type": "string"},
-                    "sources": {"type": "string"},
+                    "body": {
+                        "type": "string",
+                        "description": "Markdown report. Each required section is a ## heading.",
+                    },
                 },
-                ["what_moved", "why", "watch", "sources"],
+                ["body"],
             )
         )
     if "write_deck" in names:
@@ -332,14 +355,13 @@ def make_toolbox(
             Tool(
                 "kg",
                 "Read or write this project's knowledge graph. action is query or write. "
-                "A write sends title and text to Graphiti, which extracts entities and relations. "
+                "A write queues title and text for extraction. The entities and relations show up on a later query. "
                 "Query lists those entities and each relation's name and fact.",
                 _kg(project_id),
                 {
                     "action": {"type": "string", "description": "query or write"},
                     "title": {"type": "string"},
                     "text": {"type": "string"},
-                    "kind": {"type": "string", "description": "unused; Graphiti reads title and text"},
                 },
                 ["action"],
             )
@@ -376,8 +398,8 @@ def make_toolbox(
     return Toolbox(tools)
 
 
-def _delegate(gateway: str, project_id: str, agent_id: str, materials: str) -> Runner:
-    async def run(args: dict) -> str:
+def _delegate(run: Callable[[str, str, str], Awaitable[str]] | None, materials: str) -> Runner:
+    async def go(args: dict) -> str:
         coworker = str(args.get("coworker") or args.get("role") or "").strip()
         task = str(args.get("task") or "").strip()
         context = str(args.get("context") or "")
@@ -385,22 +407,11 @@ def _delegate(gateway: str, project_id: str, agent_id: str, materials: str) -> R
             context = (context + "\n\n" + materials).strip()
         if not coworker or not task:
             return "delegate requires coworker and task"
-        status, body = await asyncio.to_thread(
-            _post_json,
-            f"{gateway}/api/projects/{project_id}/delegate",
-            {"from": agent_id, "coworker": coworker, "task": task, "context": context},
-            26 * 60,
-        )
-        if status != 200:
-            return f"delegate {coworker} did not finish (HTTP {status}): {body[:500]}"
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
-            return body[:4000]
-        who = data.get("agent_id") or coworker
-        return f"{who} replied:\n{data.get('text') or ''}"
+        if run is None:
+            return "delegate is not available in this turn"
+        return await run(coworker, task, context)
 
-    return run
+    return go
 
 
 def _plan(gateway: str, project_id: str) -> Runner:
@@ -451,9 +462,12 @@ def _mcp(remote: MCPTool) -> Runner:
 def _kg(project_id: str) -> Runner:
     async def run(args: dict) -> str:
         action = str(args.get("action") or "query").strip().lower()
+        log.info("tool kg action=%s", action)
         from services.graph.client import GraphClient
 
-        client = GraphClient(os.environ.get("GRAPH_GRPC_ADDR", "localhost:50051"), timeout_s=4)
+        # 写入只入队。查询只读已经落库的实体。
+        timeout = 10 if action == "write" else 4
+        client = GraphClient(os.environ.get("GRAPH_GRPC_ADDR", "localhost:50051"), timeout_s=timeout)
         try:
             if action == "write":
                 return await _kg_write(client, project_id, args)
@@ -485,8 +499,6 @@ async def _kg_read(client, project_id: str) -> str:
         lines.append(line)
     relations = []
     for edge in resp.edges:
-        relation = ""
-        fact = ""
         relation = edge.relation.strip()
         if not relation:
             continue
@@ -527,13 +539,14 @@ async def _kg_write(client, project_id: str, args: dict) -> str:
         )
     )
     return (
-        "Sent this text to Graphiti for this project. "
-        "Entities and relations appear after extraction."
+        "Queued this text for the project knowledge graph. "
+        "A later query can see the extracted entities and relations."
     )
 
 
 async def _web_search(args: dict) -> str:
     query = str(args.get("query") or args.get("q") or "").strip()
+    log.info("tool web_search query=%s", query[:160])
     if not query:
         return "web_search requires query"
     return await asyncio.to_thread(_search_blocking, query)
@@ -558,11 +571,18 @@ async def _utc_time(args: dict) -> str:
     return "utc_time requires date or unix"
 
 
+_ARXIV_ID = re.compile(r"arxiv\.org/(?:abs|pdf|html|ftp)/([0-9]{4}\.[0-9]{4,5})(v[0-9]+)?", re.I)
+_PAPER_SECTION = 12000
+_TEXT_HEADING = re.compile(r"^(?:\d+(?:\.\d+)*\.?\s+)?[A-Z][A-Za-z0-9 ,:'\-]{2,80}$")
+
+
 async def _fetch_url(args: dict) -> str:
     url = str(args.get("url") or "").strip()
+    section = str(args.get("section") or "").strip()
+    log.info("tool fetch_url url=%s section=%s", url[:180], section[:80])
     if not url.startswith(("http://", "https://")):
         return "fetch_url only accepts http or https"
-    return await asyncio.to_thread(_fetch_blocking, url)
+    return await asyncio.to_thread(_fetch_blocking, url, section)
 
 
 async def _write_file(args: dict) -> str:
@@ -638,44 +658,132 @@ def _search_blocking(query: str) -> str:
     return "\n".join(lines)
 
 
-def _fetch_blocking(url: str) -> str:
-    req = Request(url, headers={"User-Agent": "Termitaria/0.1"})
-    with urlopen(req, timeout=25) as res:
-        data = res.read(1_000_000)
-        ctype = res.headers.get("Content-Type", "")
+def _fetch_blocking(url: str, section: str = "") -> str:
+    paper = _ARXIV_ID.search(url)
+    if paper is not None:
+        return _fetch_arxiv(paper.group(1), paper.group(2) or "", section)
+    status, data, ctype = _download(url, 8_000_000)
+    if status != 200 or not data:
+        return f"fetch_url failed: {url} HTTP {status or 'error'}"
     if url.lower().split("?", 1)[0].endswith(".pdf") or "pdf" in ctype.lower() or data.startswith(b"%PDF"):
-        text = _pdf_text(data)
-        return f"PDF {url}\n{text or 'No text extracted. The link itself can be cited.'}"
-    html = data.decode("utf-8", "replace")
-    text = _html_text(html)
+        return _format_pdf(url, data, section)
+    text = _html_text(data.decode("utf-8", "replace"))
     if not text:
-        return f"Opened {url}, but there was no readable text."
-    return text[:8000]
+        return f"Source: {url}\nOpened {url}, but there was no readable text."
+    return f"Source: {url}\n{text[:8000]}"
+
+
+def _fetch_arxiv(paper_id: str, version: str, section: str) -> str:
+    html_url = f"https://arxiv.org/html/{paper_id}{version}"
+    status, data, _ctype = _download(html_url, 8_000_000)
+    if status == 200 and data and b"<h" in data.lower():
+        sections = _html_sections(data.decode("utf-8", "replace"))
+        if sections:
+            return _format_paper(html_url, sections, section)
+    pdf_url = f"https://arxiv.org/pdf/{paper_id}{version}.pdf"
+    status, data, _ctype = _download(pdf_url, 20_000_000)
+    if status != 200 or not data.startswith(b"%PDF"):
+        return f"Paper https://arxiv.org/abs/{paper_id}{version} was not read. The body was not extracted."
+    return _format_pdf(pdf_url, data, section)
+
+
+def _format_pdf(url: str, data: bytes, section: str) -> str:
+    text = _pdf_text(data)
+    if not text:
+        return f"Paper {url} was not read. The body was not extracted."
+    return _format_paper(url, _text_sections(text), section)
+
+
+def _format_paper(url: str, sections: list[tuple[str, str]], section: str) -> str:
+    names = [name for name, _body in sections if name]
+    listing = "\n".join(f"- {name}" for name in names) or "- Body"
+    wanted = section.strip()
+    if wanted:
+        folded = wanted.casefold()
+        hits = [(name, body) for name, body in sections if folded in name.casefold()]
+        if not hits:
+            for name, body in sections:
+                at = body.casefold().find(folded)
+                if at >= 0:
+                    start = max(0, at - 400)
+                    excerpt = body[start : start + _PAPER_SECTION]
+                    return f"Paper {url}\nNo heading matched {wanted}. Excerpt from {name}:\n\n{excerpt}"
+            return f"Paper {url}\nNo section matching {wanted}.\nSections:\n{listing}"
+        name, body = hits[0]
+        return f"Paper {url}\nSection: {name}\n\n{body[:_PAPER_SECTION]}"
+    first_name, first_body = sections[0]
+    return (
+        f"Paper {url}\nSections:\n{listing}\n\n"
+        f"Section: {first_name}\n\n{first_body[:4000]}\n\n"
+        "Call fetch_url again with section set to a heading to read that part."
+    )
+
+
+def _download(url: str, limit: int) -> tuple[int, bytes, str]:
+    req = Request(url, headers={"User-Agent": "Termitaria/0.1 (research)"})
+    try:
+        with urlopen(req, timeout=40) as res:
+            return res.status, res.read(limit), res.headers.get("Content-Type", "")
+    except HTTPError as exc:
+        return exc.code, exc.read(500), ""
+    except (URLError, TimeoutError, OSError):
+        return 0, b"", ""
+
+
+def _html_sections(html: str) -> list[tuple[str, str]]:
+    html = re.sub(r"(?is)<(script|style|nav|header|footer).*?>.*?</\1>", " ", html)
+    parts = re.split(r"(?is)<h[1-3][^>]*>(.*?)</h[1-3]>", html)
+    if len(parts) < 3:
+        text = _html_text(html).strip()
+        return [("Body", text[:_PAPER_SECTION])] if text else []
+    sections: list[tuple[str, str]] = []
+    preamble = _html_text(parts[0]).strip()
+    if len(preamble) > 80:
+        sections.append(("Preamble", preamble[:_PAPER_SECTION]))
+    for index in range(1, len(parts), 2):
+        title = _html_text(parts[index]).strip()[:200]
+        body = _html_text(parts[index + 1]).strip() if index + 1 < len(parts) else ""
+        if title and body:
+            sections.append((title, body[:_PAPER_SECTION]))
+    return sections
+
+
+def _text_sections(text: str) -> list[tuple[str, str]]:
+    sections: list[tuple[str, str]] = []
+    title = "Body"
+    buf: list[str] = []
+
+    def flush() -> None:
+        body = "\n".join(buf).strip()
+        if body:
+            sections.append((title, body[:_PAPER_SECTION]))
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if _TEXT_HEADING.match(stripped) and len(buf) > 3:
+            flush()
+            buf = []
+            title = stripped
+            continue
+        buf.append(line)
+    flush()
+    return sections or [("Body", text[:_PAPER_SECTION])]
 
 
 def _pdf_text(data: bytes) -> str:
-    if shutil.which("pdftotext"):
-        try:
-            out = subprocess.run(
-                ["pdftotext", "-q", "-", "-"],
-                input=data,
-                capture_output=True,
-                timeout=15,
-                check=False,
-            )
-            text = out.stdout.decode("utf-8", "replace").strip()
-            if text:
-                return text[:8000]
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    parts = re.findall(rb"\((?:\\.|[^\\)]){8,200}\)", data)
-    lines = []
-    for part in parts[:80]:
-        raw = part[1:-1].replace(b"\\n", b"\n").replace(b"\\(", b"(").replace(b"\\)", b")")
-        line = raw.decode("latin1", "replace").strip()
-        if line:
-            lines.append(line)
-    return "\n".join(lines)[:8000]
+    if not data.startswith(b"%PDF") or not shutil.which("pdftotext"):
+        return ""
+    try:
+        out = subprocess.run(
+            ["pdftotext", "-q", "-layout", "-", "-"],
+            input=data,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return out.stdout.decode("utf-8", "replace").strip()
 
 
 def _html_text(html: str) -> str:
@@ -727,23 +835,103 @@ def load_project(gateway: str, project_id: str) -> dict | None:
     return None
 
 
-def _write_report(gateway: str, project_id: str) -> Runner:
+def _write_report(gateway: str, project_id: str, deliverable: dict | None, sources: set | None) -> Runner:
     async def run(args: dict) -> str:
-        sections = {
-            "What moved": str(args.get("what_moved") or "").strip(),
-            "Why": str(args.get("why") or "").strip(),
-            "What to watch": str(args.get("watch") or "").strip(),
-            "Sources": str(args.get("sources") or "").strip(),
-        }
-        short = [name for name, text in sections.items() if len(text) < 40]
-        if short:
-            return "write_report needs a full sentence in: " + ", ".join(short)
-        title = str(args.get("title") or "Copper brief").strip() or "Copper brief"
-        body = f"# {title}\n\n" + "\n\n".join(f"## {name}\n\n{text}" for name, text in sections.items())
-        name = _artifact_name(str(args.get("name") or ""), ".md", "brief.md")
-        return await asyncio.to_thread(_store_artifact, gateway, project_id, name, "report", body.encode("utf-8"))
+        title = str(args.get("title") or "Report").strip() or "Report"
+        body = str(args.get("body") or "").strip()
+        problem = report_error(body, deliverable, sources)
+        if problem:
+            return problem
+        if not body.startswith("# "):
+            body = f"# {title}\n\n{body}"
+        name = _artifact_name(str(args.get("name") or ""), ".md", "report.md")
+        evidence = sorted(collect_urls("\n".join(sources or [])))
+        return await asyncio.to_thread(
+            _store_artifact, gateway, project_id, name, "report", body.encode("utf-8"), evidence
+        )
 
     return run
+
+
+def report_error(body: str, deliverable: dict | None, sources: set | None) -> str:
+    """成稿不合规格时返回给模型的那句原因。通过则返回空字符串。"""
+    body = (body or "").strip()
+    if not deliverable or not deliverable.get("sections"):
+        if len(body) < 200:
+            return "write_report needs the full report in body"
+        return ""
+    known = collect_urls("\n".join(sources or []))
+    found = _section_bodies(body)
+    for section in deliverable.get("sections") or []:
+        heading = str(section.get("heading") or "").strip()
+        text = found.get(heading.casefold())
+        if text is None:
+            return f"write_report is missing the section {heading}"
+        if len(text) < int(section.get("min_chars") or 0):
+            return f"write_report section {heading} is too short"
+    for section in deliverable.get("sections") or []:
+        if not section.get("citations"):
+            continue
+        heading = str(section.get("heading") or "").strip()
+        if not _has_known_link(found.get(heading.casefold(), ""), known):
+            return f"write_report section {heading} needs a link that a tool returned"
+    if len(body) < int(deliverable.get("min_chars") or 0):
+        return "write_report is too short"
+    return ""
+
+
+def collect_urls(text: str) -> set[str]:
+    return {_clean_url(match) for match in _URL_RE.findall(text or "") if _clean_url(match)}
+
+
+def _report_description(deliverable: dict | None) -> str:
+    if not deliverable or not deliverable.get("sections"):
+        return "Store the project report. body is markdown."
+    lines = [
+        "Store the project report. body is markdown with these ## headings.",
+        "A section that asks for a link must include one URL a tool already returned.",
+        "Other links and design numbers can stay in the text.",
+    ]
+    for section in deliverable.get("sections") or []:
+        heading = section.get("heading") or ""
+        minimum = int(section.get("min_chars") or 0)
+        extra = " Include a link a tool returned." if section.get("citations") else ""
+        lines.append(f"- ## {heading} (at least {minimum} characters).{extra}")
+    if deliverable.get("require_deck"):
+        lines.append("After this report is stored, call write_deck.")
+    return "\n".join(lines)
+
+
+def _section_bodies(body: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    current = ""
+    buf: list[str] = []
+
+    def flush() -> None:
+        nonlocal current, buf
+        if not current:
+            buf = []
+            return
+        found[current] = "\n".join(buf).strip()
+        buf = []
+
+    for line in body.splitlines():
+        match = _HEADING_RE.match(line.strip())
+        if match:
+            flush()
+            current = match.group(1).strip().casefold()
+            continue
+        buf.append(line)
+    flush()
+    return found
+
+
+def _clean_url(raw: str) -> str:
+    return raw.strip().rstrip(".,);]>")
+
+
+def _has_known_link(text: str, known: set[str]) -> bool:
+    return any(link in known for link in collect_urls(text))
 
 
 def _write_deck(gateway: str, project_id: str) -> Runner:
@@ -795,10 +983,13 @@ def _artifact_name(raw: str, suffix: str, fallback: str) -> str:
     return name
 
 
-def _store_artifact(gateway: str, project_id: str, name: str, kind: str, raw: bytes) -> str:
+def _store_artifact(gateway: str, project_id: str, name: str, kind: str, raw: bytes, evidence: list[str] | None = None) -> str:
+    payload = {"name": name, "kind": kind, "content_base64": base64.standard_b64encode(raw).decode("ascii")}
+    if evidence:
+        payload["evidence_urls"] = evidence
     status, body = _post_json(
         f"{gateway}/api/projects/{project_id}/artifacts",
-        {"name": name, "kind": kind, "content_base64": base64.standard_b64encode(raw).decode("ascii")},
+        payload,
         30,
     )
     if status != 201:

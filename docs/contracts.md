@@ -82,8 +82,7 @@
 
 - `ModelPolicy` 是 hackathon 展示点：role → Nemotron 档位（Nano/Super 保响应，Ultra 保推理），路由是配置不是代码。
 - `TopologyPolicy` 限制 `max_sessions_total` / `max_fanout_per_agent`，防拓扑爆炸（架构 §9）。
-- **星型拓扑**：`goal` 是项目目标（一个项目 = 一个 swarm）；`AgentSpec.kind` 区分 `WORKER` / `ORCHESTRATOR`，每 swarm 恰好一个 orchestrator（schema `minContains/maxContains` + Scheduler 双校验）。orchestrator↔worker 的 spoke 隐式存在；`EdgeSpec` 只声明 worker 之间的 opt-in 直连，`max_fanout_per_agent` 只约束 worker 的 peer 边数。
-- worker 的 subagent 是父 agent 的附属：不参与 mesh、不声明为 AgentSpec、不走 `tasks.*`——进程内同步调用，预算计入父 task（对应 LangChain subagents pattern；跨 agent 委派才走总线，且只有 orchestrator 能发起）。
+- **星型拓扑**：`goal` 是项目目标（一个项目 = 一个 swarm）；`AgentSpec.kind` 区分 `WORKER` / `ORCHESTRATOR`，每 swarm 恰好一个 orchestrator。只有 orchestrator 能 `delegate`。同事在 orchestrator 这一次 task 里同步跑完，不另开 task，也不另占 worker 名额。worker 不能再 `delegate`。YAML 里的 `edges` 当前运行时不拿来开会话。
 
 ### 3.3 Memory（memory/v1）
 
@@ -97,9 +96,9 @@ Memory Service 只读写一个 agent 的记忆。它不读、不写 Knowledge Gr
 
 Knowledge Graph Service 只读写一个 project 的图。一个 project 就是一个 swarm，对应一张 FalkorDB 图。图不按 agent 切开。agent 记忆里的 episode 不会变成这张图上的节点。
 
-- 一个 project 一张 Graphiti 图。Graphiti 从正文抽出实体，每条边有它写下的名字和一句事实。
-- 唯一写路径是 ingest：消费 `memory.write.document`，chunk → embed → 抽 claim / citation → upsert。worker 推理期间不写图。
-- `QuerySubgraph`（种子节点 + 跳数 + 边类型过滤）只在这张 project 图上查。dispatcher 在入队前把种子放进 `TaskContext.graph_node_ids`。同一接口也给 UI 做只读预览。
+- 一个 project 一张 Graphiti 图。Graphiti 从正文抽出实体，每条边有它写下的名字和一句事实。调用方传来的边不进图。
+- 写路径有两条。ingest 消费 `memory.write.document`。worker 的 `kg` 工具在推理时把一段文字交给 Graphiti，并等到抽取结束。
+- `QuerySubgraph` 只查这张 project 图。dispatcher 在入队前把种子放进 `TaskContext.graph_node_ids`。同一接口也给 UI 做只读预览。worker 的 `kg` 查询走的是同一个 RPC。
 - 属性图：`props` 是开放的 `google.protobuf.Struct`（作者、年份、摘要等）。节点/边的领域属性不进冻结契约。正文走 `content_ref`，不进总线。
 
 ---
@@ -108,7 +107,7 @@ Knowledge Graph Service 只读写一个 project 的图。一个 project 就是�
 
 一次推理工作项 = 自包含上下文 + 预算 + 回调 subject。
 
-- **自包含**：worker 无状态，也不在推理中访问两个记忆服务。`TaskContext` 必须带齐会话窗口 + 这一个 agent 的预取记忆 + 这一个 project 的 KG 节点 id。`knowledge` 是同一份子图的可读文本，只含这个 project 的节点。orchestrator 任务另带 `ledger` 台账快照。这些都由 Go 在 dispatch 前预取。
+- **自包含的预取**：dispatcher 在入队前把会话窗口、这个 agent 的记忆、这个 project 的图种子放进 `TaskContext`。worker 另外可以在推理中调用 `KnowledgeGraphService` 的 `kg` 工具。
 - **预算**：`Budget{max_tokens, max_cost_usd, deadline_ms}`，耗尽即 `TASK_STATUS_CANCELLED`。
 - **双通道回写**：流式 `TaskDelta`（带 `seq` 可重排）走 delta subject；最终 `TaskResult` 走 result subject 给 session actor。
 - `TaskUsage` 记录实际模型与 token 用量——demo 时展示模型分层与成本（架构 §7）。
@@ -117,15 +116,13 @@ Knowledge Graph Service 只读写一个 project 的图。一个 project 就是�
 
 | | worker | orchestrator |
 | --- | --- | --- |
-| 触发源 | 消息 / turn（`trigger_message_id`） | 事件（`system_trigger`：项目启动 / 工单指派 / 逾期 / spoke 停滞） |
-| 图模板 | reason → act → observe | plan → delegate → monitor → nudge → synthesize |
-| 上下文 | window + recalled + KG 节点 | 另加 `LedgerSnapshot`（goal + 全部工单） |
+| 触发源 | 消息 / turn（`trigger_message_id`） | 用户在负责人的会话里发言。同样是一条 task |
+| 图 | reason → act → observe，最多 20 轮工具 | 同一个图。`delegate` 在这次 task 里把同事跑完 |
+| 上下文 | window + recalled + 预取的图种子 | 同样这些。步骤和成稿规格来自项目 JSON |
 
-**委派链字段**：`parent_task_id`（因哪个 task 的产出而生，空 = 根）、`delegation_depth`（dispatcher 强制上限，防委派循环）、`work_item_id`（该 task 服务的工单，空 = 项目级规划任务）。root 关联由 `swarm_id` 免费提供（一个项目 = 一个 swarm），无需独立 root id。
+`parent_task_id`、`delegation_depth`、`system_trigger`、`TaskContext.ledger` 在 proto 里有定义。当前 dispatcher 不填写 `delegation_depth`，也不预取 `LedgerSnapshot`。SwarmSpec 里的 `ledger` 工具名在 worker 里是 `advance` 的别名，只改项目步骤，不写 `ledger.*.events`。
 
-**Ledger 单写者约定**：orchestrator（LLM）的台账操作以 `ContentBlock.tool_call` 提议（tool 名约定 `ledger.*`：`ledger.create_work_item` / `ledger.assign` / `ledger.review` 等，参数为 JSON），Go 项目骨架校验（预算上限、assignee 存在、状态机合法）通过后落 `ledger.<swarm>.events`；worker 的交付经 spoke session 到达，由骨架转写为 `WorkItemDelivered`。worker 与 orchestrator 都不直接写 ledger 流——与 session 的单写者原则同构。
-
-**触发语义细节**：worker 的输出永远以消息形式经 spoke session 到达 orchestrator（消息触发）；只有时钟/控制面事件走 `system_trigger`。因此 `TaskStatus` 不需要 `WAITING`——事件驱动续跑使「等待」表现为 task 正常完成 + 事件到达后的新 task（≈ A2A `input-required` 的续跑语义，v1 内可按 §8 规则后补）。
+**同事的结果**作为 `delegate` 的工具返回交回 orchestrator，附带这次真正跑过的工具、改过的步骤和写成的文件。不经 spoke session，也不另开一条 task。
 
 ---
 

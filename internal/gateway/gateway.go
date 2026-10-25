@@ -47,6 +47,7 @@ type agentJSON struct {
 	ID          string   `json:"id"`
 	DisplayName string   `json:"display_name"`
 	Kind        string   `json:"kind"`
+	RolePrompt  string   `json:"role_prompt,omitempty"`
 	Tools       []string `json:"tools,omitempty"`
 	Skills      []string `json:"skills,omitempty"`
 }
@@ -65,13 +66,14 @@ type artifactJSON struct {
 }
 
 type projectJSON struct {
-	ID        string         `json:"id"`
-	Name      string         `json:"name"`
-	Goal      string         `json:"goal"`
-	Agents    []agentJSON    `json:"agents"`
-	Steps     []stepJSON     `json:"steps,omitempty"`
-	Seeds     []seedJSON     `json:"seeds,omitempty"`
-	Artifacts []artifactJSON `json:"artifacts,omitempty"`
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	Goal        string             `json:"goal"`
+	Deliverable *swarm.Deliverable `json:"deliverable,omitempty"`
+	Agents      []agentJSON        `json:"agents"`
+	Steps       []stepJSON         `json:"steps,omitempty"`
+	Seeds       []seedJSON         `json:"seeds,omitempty"`
+	Artifacts   []artifactJSON     `json:"artifacts,omitempty"`
 }
 
 type stateFile struct {
@@ -144,6 +146,9 @@ func New(manager *session.Manager, specs []*swarm.Spec, statePath string, replyT
 			s.sessions = map[string]string{}
 		}
 		for _, p := range s.projects {
+			if p.Deliverable == nil {
+				p.Deliverable = swarm.CompileDeliverable(swarm.Deliverable{}, p.Goal)
+			}
 			s.startProject(p)
 		}
 	} else if os.IsNotExist(err) {
@@ -161,15 +166,17 @@ func New(manager *session.Manager, specs []*swarm.Spec, statePath string, replyT
 
 func projectFromSpec(id string, spec *swarm.Spec) *projectJSON {
 	p := &projectJSON{
-		ID:   id,
-		Name: titleName(spec.Name),
-		Goal: spec.Goal,
+		ID:          id,
+		Name:        titleName(spec.Name),
+		Goal:        spec.Goal,
+		Deliverable: swarm.CompileDeliverable(spec.Deliverable, spec.Goal),
 	}
 	for _, a := range spec.Agents {
 		p.Agents = append(p.Agents, agentJSON{
 			ID: a.ID, DisplayName: a.DisplayName, Kind: a.Kind,
-			Tools:  append([]string(nil), a.Tools...),
-			Skills: append([]string(nil), a.Skills...),
+			RolePrompt: a.RolePrompt,
+			Tools:      append([]string(nil), a.Tools...),
+			Skills:     append([]string(nil), a.Skills...),
 		})
 	}
 	return p
@@ -533,9 +540,10 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, err.Error())
 		return
 	}
+	// 这是这次 HTTP 请求的等待上限。任务还在跑，回复稍后仍会落进会话。
+	// 步骤失败只看任务结果：取消，或失败且错误码含 BUDGET / TIMEOUT。
 	agentMsg, err := s.waitReply(r.Context(), sessionID, userMsg.GetMessageId())
 	if err != nil {
-		s.failActive(projectID)
 		writeError(w, 504, "The agent reply timed out. The worker is running, but the model is slow. Refresh later to see the result.")
 		return
 	}

@@ -84,4 +84,16 @@ func TestLoadExample(t *testing.T) {
 	if spec.Name != "autoresearch" || len(spec.Agents) < 3 || spec.Raw == "" {
 		t.Fatalf("example spec = %s agents=%d", spec.Name, len(spec.Agents))
 	}
+	got := CompileDeliverable(spec.Deliverable, spec.Goal)
+	if got == nil || got.Kind != "paper" || len(got.Sections) != 5 || got.RequireDeck {
+		t.Fatalf("deliverable = %+v", got)
+	}
+	brief, err := LoadFile("../../examples/swarms/copper-desk.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	desk := CompileDeliverable(brief.Deliverable, brief.Goal)
+	if desk == nil || desk.Kind != "brief" || !desk.RequireDeck || desk.Sections[0].Heading != "Price table" {
+		t.Fatalf("brief = %+v", desk)
+	}
 }

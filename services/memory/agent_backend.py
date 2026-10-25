@@ -14,6 +14,7 @@ import uuid
 from termitaria.memory.v1 import memory_pb2
 
 from .config import MemoryConfig
+from .graph_view import build_graph_view
 from .items import assemble_response
 from .timing import time_warm_queries
 
@@ -302,6 +303,30 @@ class AgentBackend:
     async def write_document(self, req: memory_pb2.WriteDocumentRequest) -> str:
         del req
         return ""
+
+    async def graph_view(self, agent_id: str) -> dict:
+        async with self._lock:
+            rows = await asyncio.to_thread(self._rows.list_agent, agent_id)
+        nodes = [{"id": agent_id, "name": agent_id, "summary": "This agent's memory."}]
+        edges = []
+        for row in rows:
+            if int(row.get("kind") or 0) != memory_pb2.MEMORY_KIND_EPISODE:
+                continue
+            item_id = str(row.get("item_id") or "")
+            text = str(row.get("text") or "").strip()
+            if not item_id or not text:
+                continue
+            nodes.append({"id": item_id, "name": "episode", "summary": text[:500]})
+            edges.append(
+                {
+                    "id": item_id,
+                    "source": agent_id,
+                    "target": item_id,
+                    "fact": text[:240],
+                    "name": "REMEMBERS",
+                }
+            )
+        return build_graph_view(self.name, agent_id, nodes, edges)
 
 
 def _item(row: dict, kind: int | None = None) -> memory_pb2.MemoryItem:

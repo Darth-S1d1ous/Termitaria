@@ -18,15 +18,28 @@ const (
 	maxArtifact    = 2_000_000
 )
 
-func deliverablesReady(arts []artifactJSON) bool {
+func deliverablesReady(p *projectJSON) bool {
+	if p == nil {
+		return false
+	}
 	var report, deck bool
-	for _, art := range arts {
-		if art.Kind == "report" && art.Bytes >= minReportBytes {
+	for _, art := range p.Artifacts {
+		reportReady := art.Kind == "report" && art.Bytes >= minReportBytes
+		if p.Deliverable != nil && art.Kind == "report" && art.Bytes > 0 {
+			reportReady = true
+		}
+		if reportReady {
 			report = true
 		}
 		if art.Kind == "deck" && art.Bytes >= minDeckBytes {
 			deck = true
 		}
+	}
+	if p.Deliverable != nil {
+		if !report {
+			return false
+		}
+		return !p.Deliverable.RequireDeck || deck
 	}
 	return report && deck
 }
@@ -34,9 +47,10 @@ func deliverablesReady(arts []artifactJSON) bool {
 func (s *Server) createArtifact(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 	var body struct {
-		Name          string `json:"name"`
-		Kind          string `json:"kind"`
-		ContentBase64 string `json:"content_base64"`
+		Name          string   `json:"name"`
+		Kind          string   `json:"kind"`
+		ContentBase64 string   `json:"content_base64"`
+		Evidence      []string `json:"evidence_urls"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "bad json")
@@ -52,9 +66,25 @@ func (s *Server) createArtifact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "content_base64 must be a file under 2MB")
 		return
 	}
-	if body.Kind == "report" && len(raw) < minReportBytes {
-		writeError(w, 400, "report is too short")
-		return
+	if body.Kind == "report" {
+		s.mu.Lock()
+		var rubric *swarm.Deliverable
+		for _, p := range s.projects {
+			if p.ID == projectID {
+				rubric = p.Deliverable
+				break
+			}
+		}
+		s.mu.Unlock()
+		if rubric != nil {
+			if problem := reportError(string(raw), rubric, body.Evidence); problem != "" {
+				writeError(w, 400, problem)
+				return
+			}
+		} else if len(raw) < minReportBytes {
+			writeError(w, 400, "report is too short")
+			return
+		}
 	}
 	if body.Kind == "deck" && len(raw) < minDeckBytes {
 		writeError(w, 400, "deck is too short")

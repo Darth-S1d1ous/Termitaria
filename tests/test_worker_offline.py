@@ -5,7 +5,7 @@
 import asyncio
 
 from services.worker import envelope
-from services.worker.graph import remembered_facts
+from services.worker.graph import _forced_ask, remembered_facts
 from services.worker.model import Chunk, Done, StubModel
 from services.worker.runner import TaskRunner
 from termitaria.common.v1 import common_pb2
@@ -163,3 +163,30 @@ def test_prompt_keeps_five_remembered_facts():
     assert "Remembered facts:" in model.system
     assert "FACT-4-UNIQUE" in model.system
     assert "FACT-5-UNIQUE" not in model.system
+
+
+def test_forced_ask_quotes_the_report_rejection_for_a_paper():
+    held = {
+        "deliverable": {"kind": "paper"},
+        "steps": [{"label": "methods review", "state": "active"}],
+    }
+    window = [(
+        "tool",
+        "write_report → write_report uses a link no tool returned: https://stats.oarc.ucla.edu/other/gpower/:",
+    )]
+    text = _forced_ask(held, window)
+    assert "What I already have:" in text
+    assert "https://stats.oarc.ucla.edu/other/gpower/" in text
+    assert 'The step "methods review" is still open because write_report uses a link no tool returned:' in text
+    assert "revise the paper" in text
+    assert "write the brief" not in text
+
+
+def test_forced_ask_keeps_the_source_question_for_a_brief():
+    held = {
+        "deliverable": {"kind": "brief"},
+        "steps": [{"label": "find the filing", "state": "active"}],
+    }
+    text = _forced_ask(held, [("tool", "fetch_url → the filing page has no table")])
+    assert 'The step "find the filing" is still open.' in text
+    assert "Which source should I open before I write the brief?" in text

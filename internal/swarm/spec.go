@@ -26,16 +26,18 @@ type AgentSpec struct {
 }
 
 type Spec struct {
-	Name   string
-	Goal   string
-	Agents []AgentSpec
-	Raw    string // 原始 YAML，创建项目时原样回给前端
+	Name        string
+	Goal        string
+	Deliverable Deliverable
+	Agents      []AgentSpec
+	Raw         string // 原始 YAML，创建项目时原样回给前端
 }
 
 type specFile struct {
-	Name   string      `yaml:"name"`
-	Goal   string      `yaml:"goal"`
-	Agents []AgentSpec `yaml:"agents"`
+	Name        string      `yaml:"name"`
+	Goal        string      `yaml:"goal"`
+	Deliverable Deliverable `yaml:"deliverable"`
+	Agents      []AgentSpec `yaml:"agents"`
 }
 
 func LoadFile(path string) (*Spec, error) {
@@ -85,10 +87,11 @@ func Parse(raw []byte) (*Spec, error) {
 		return nil, fmt.Errorf("exactly one ORCHESTRATOR is required, found %d", orchestrators)
 	}
 	return &Spec{
-		Name:   f.Name,
-		Goal:   strings.TrimSpace(f.Goal),
-		Agents: f.Agents,
-		Raw:    string(raw),
+		Name:        f.Name,
+		Goal:        strings.TrimSpace(f.Goal),
+		Deliverable: f.Deliverable,
+		Agents:      f.Agents,
+		Raw:         string(raw),
 	}, nil
 }
 

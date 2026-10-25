@@ -82,12 +82,18 @@ type Dispatcher struct {
 	mu        sync.Mutex
 	triggered map[string]string
 
-	cc     jetstream.ConsumeContext
-	resSub *nats.Subscription
-	hub    *live.Hub
+	cc          jetstream.ConsumeContext
+	resSub      *nats.Subscription
+	hub         *live.Hub
+	skipSpeaker func(sessionID, agentID string) bool
 }
 
 func (d *Dispatcher) SetHub(h *live.Hub) { d.hub = h }
+
+// SetSkipSpeaker 在入队前问一句要不要跳过这个发言者。nil 表示谁该说都入队。
+func (d *Dispatcher) SetSkipSpeaker(fn func(sessionID, agentID string) bool) {
+	d.skipSpeaker = fn
+}
 
 func New(b *bus.Bus, sessions *session.Manager, registry AgentRegistry, windowLimit int) *Dispatcher {
 	return &Dispatcher{
@@ -199,6 +205,9 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 	agentID := next.GetAgentId()
 	if agentID == "" {
 		return nil // 下一个发言者是人：人走 AppendMessage，不产生 task
+	}
+	if d.skipSpeaker != nil && d.skipSpeaker(ev.GetSessionId(), agentID) {
+		return nil
 	}
 	cfg, ok := d.registry.Lookup(agentID)
 	if !ok {

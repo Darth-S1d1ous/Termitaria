@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -155,6 +156,36 @@ def _when(occurred_at_ms: int) -> datetime:
     return datetime.now(timezone.utc)
 
 
+def load_llm_json(text: str, finish_reason: str | None) -> dict:
+    """解析模型吐出的 JSON。finish_reason 为 length 或缺失时不修补截断结果。"""
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as err:
+        if finish_reason == "length" or not finish_reason:
+            raise
+        try:
+            value = _repair_llm_json(text, err)
+        except Exception:
+            raise err from None
+        if not isinstance(value, dict):
+            raise err
+        log.info("repaired llm json finish_reason=%s", finish_reason)
+        return value
+    if not isinstance(value, dict):
+        raise json.JSONDecodeError("llm json was not an object", text, 0)
+    return value
+
+
+def _repair_llm_json(text: str, err: json.JSONDecodeError):
+    # Extra data 是第一个对象后面又接了一段。取第一个完整对象。
+    if err.msg.startswith("Extra data"):
+        value, _ = json.JSONDecoder().raw_decode(text)
+        return value
+    import json_repair
+
+    return json_repair.loads(text)
+
+
 def _llm_client(config):
     # DeepSeek 这类兼容端点不收 json_schema，库文档要求改成 json_object。
     mode = "json_schema"
@@ -162,9 +193,53 @@ def _llm_client(config):
     if base and "api.openai.com" not in base:
         mode = "json_object"
     try:
-        from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
+        from graphiti_core.llm_client.errors import EmptyResponseError, RateLimitError
+        from graphiti_core.llm_client.openai_generic_client import DEFAULT_MODEL, OpenAIGenericClient
 
-        return OpenAIGenericClient(config=config, structured_output_mode=mode)
+        class RepairingClient(OpenAIGenericClient):
+            async def _generate_response(
+                self,
+                messages,
+                response_model=None,
+                max_tokens=1024,
+                model_size=None,
+                *,
+                model=None,
+            ):
+                import openai
+                from openai.types.chat import ChatCompletionMessageParam
+
+                openai_messages: list[ChatCompletionMessageParam] = []
+                for item in messages:
+                    item.content = self._clean_input(item.content)
+                    if item.role == "user":
+                        openai_messages.append({"role": "user", "content": item.content})
+                    elif item.role == "system":
+                        openai_messages.append({"role": "system", "content": item.content})
+                try:
+                    response = await self.client.chat.completions.create(
+                        model=model or self.model or DEFAULT_MODEL,
+                        messages=openai_messages,
+                        temperature=self.temperature,
+                        max_tokens=max_tokens,
+                        response_format=self._build_response_format(response_model),
+                    )
+                except openai.RateLimitError as exc:
+                    raise RateLimitError from exc
+                except Exception as exc:
+                    log.error("Error in generating LLM response: %s", exc)
+                    raise
+                choice = response.choices[0]
+                result = choice.message.content or ""
+                if not result:
+                    raise EmptyResponseError("LLM returned an empty response")
+                try:
+                    return load_llm_json(self._strip_code_fences(result), choice.finish_reason)
+                except json.JSONDecodeError as exc:
+                    log.error("Error in generating LLM response: %s", exc)
+                    raise
+
+        return RepairingClient(config=config, structured_output_mode=mode)
     except ImportError:
         from graphiti_core.llm_client.openai_client import OpenAIClient
 
