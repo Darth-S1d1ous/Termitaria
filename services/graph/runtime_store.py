@@ -1,13 +1,12 @@
-"""选择图存储。FalkorDB 通着就用它，一个 project 一张图。否则退回进程内的图。"""
+"""打开 Graphiti。FalkorDB 或模型没配上时，入库只记日志，不编一张假图。"""
 from __future__ import annotations
 
 import logging
 import socket
+from urllib.parse import urlparse
 
-from .canned import install
 from .config import GraphConfig
-from .falkor_store import FalkorStore, parse_falkor_url
-from .store import InMemoryGraph
+from .graphiti_kg import GraphitiKnowledge, IdleKnowledge, open_graphiti
 
 log = logging.getLogger(__name__)
 
@@ -20,22 +19,21 @@ def _port_open(host: str, port: int) -> bool:
         return False
 
 
-async def open_store(cfg: GraphConfig):
-    if cfg.load_canned:
-        store = InMemoryGraph()
-        await install(store)
-        log.info("graph store: canned")
-        return store
-    host, port = parse_falkor_url(cfg.falkordb_url)
-    if _port_open(host, port):
+def _falkor(url: str) -> tuple[str, int]:
+    parsed = urlparse(url if "://" in url else "redis://" + url)
+    return parsed.hostname or "localhost", parsed.port or 6379
+
+
+async def open_engine(cfg: GraphConfig):
+    host, port = _falkor(cfg.falkordb_url)
+    if not _port_open(host, port):
+        log.error("falkordb %s:%s unreachable", host, port)
+        return IdleKnowledge()
+    engine = open_graphiti(host, port)
+    if isinstance(engine, GraphitiKnowledge):
         try:
-            store = FalkorStore(host, port)
-            store.ping()
+            await engine.open()
         except Exception:
-            log.exception("falkordb init failed, using an in-memory graph")
-        else:
-            log.info("graph store: falkordb %s:%s", host, port)
-            return store
-    else:
-        log.error("falkordb %s:%s unreachable, using an in-memory graph", host, port)
-    return InMemoryGraph()
+            log.exception("graphiti init failed")
+            return IdleKnowledge()
+    return engine

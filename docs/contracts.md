@@ -97,7 +97,7 @@ Memory Service 只读写一个 agent 的记忆。它不读、不写 Knowledge Gr
 
 Knowledge Graph Service 只读写一个 project 的图。一个 project 就是一个 swarm，对应一张 FalkorDB 图。图不按 agent 切开。agent 记忆里的 episode 不会变成这张图上的节点。
 
-- 节点 = `DOCUMENT` / `PAPER` / `CLAIM` / `CONCEPT`。边 = 引用 / 推导 / 依赖 / 支持 / 反驳。
+- 一个 project 一张 Graphiti 图。Graphiti 从正文抽出实体，每条边有它写下的名字和一句事实。
 - 唯一写路径是 ingest：消费 `memory.write.document`，chunk → embed → 抽 claim / citation → upsert。worker 推理期间不写图。
 - `QuerySubgraph`（种子节点 + 跳数 + 边类型过滤）只在这张 project 图上查。dispatcher 在入队前把种子放进 `TaskContext.graph_node_ids`。同一接口也给 UI 做只读预览。
 - 属性图：`props` 是开放的 `google.protobuf.Struct`（作者、年份、摘要等）。节点/边的领域属性不进冻结契约。正文走 `content_ref`，不进总线。

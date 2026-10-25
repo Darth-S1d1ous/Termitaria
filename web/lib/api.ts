@@ -78,8 +78,7 @@ export type ProjectGraphEdge = {
   id: string;
   source: string;
   target: string;
-  kind: string;
-  label?: string;
+  relation: string;
   fact?: string;
 };
 

@@ -1,10 +1,7 @@
-"""memory.write.document → KG 的 ingest stub（路线图决策 2：KG 的唯一写路径）。
+"""memory.write.document → Graphiti。
 
 独立 durable（graph-ingest）。MEMORY stream 是 LimitsPolicy，与 memory 服务的
 观测 consumer 各收一份，互不抢消息。
-
-TODO(colleague) 的四步在 _extract；本 stub 只做两件可观测的事：
-落盘 JSONL，以及把文档本身 upsert 成 DOCUMENT 节点。
 """
 from __future__ import annotations
 
@@ -19,9 +16,7 @@ from termitaria.memory.v1 import memory_pb2
 from services.common import envelope
 
 from .config import GraphConfig
-from .project_graph import ingest_document
-from .relate import link_documents
-from .store import GraphStore
+from .graphiti_kg import project_of
 
 log = logging.getLogger(__name__)
 
@@ -29,16 +24,27 @@ _STREAM = "MEMORY"
 _SUBJECT = "memory.write.document"
 _DURABLE = "graph-ingest"
 
+
 def document_node_id(doc_id: str) -> str:
     """确定性 id：ingest 重试覆盖同一节点（路线图决策 3）。"""
     return "gn_doc_" + doc_id
 
 
+def document_body(doc: memory_pb2.Document) -> str:
+    ref = (doc.content_ref or "").strip()
+    if ref and "\n" not in ref and len(ref) < 512 and os.path.isfile(ref):
+        with open(ref, encoding="utf-8", errors="replace") as handle:
+            return handle.read(20000)
+    if ref:
+        return ref[:20000]
+    return doc.title
+
+
 class Ingestor:
-    def __init__(self, nc, cfg: GraphConfig, store: GraphStore) -> None:
+    def __init__(self, nc, cfg: GraphConfig, engine) -> None:
         self._js = nc.jetstream()
         self._cfg = cfg
-        self._store = store
+        self._engine = engine
         self._path = os.path.join(cfg.spool_dir, "documents.jsonl")
         self._seen: set[str] = set()  # event_id 内存级去重；MVP 不持久化
         self.ingested: list[str] = []  # 已落图的 node_id，测试断言口
@@ -77,9 +83,13 @@ class Ingestor:
 
     async def _ingest(self, doc: memory_pb2.Document, trace_id: str) -> str:
         log.info("ingest doc=%s trace=%s", doc.doc_id, trace_id)
-        node_id = await ingest_document(self._store, doc)
-        await link_documents(self._store, node_id)
-        return node_id
+        project = project_of(doc.doc_id) or "default"
+        text = document_body(doc)
+        try:
+            await self._engine.add_text(project, doc.title or doc.doc_id, text)
+        except Exception:
+            log.exception("graphiti extract failed doc=%s", doc.doc_id)
+        return doc.doc_id
 
     def _spool(self, env, req: memory_pb2.WriteDocumentRequest) -> None:
         line = {

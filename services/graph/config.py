@@ -10,7 +10,7 @@ from typing import Self
 class GraphConfig:
     nats_url: str
     grpc_addr: str = "localhost:50051"   # KnowledgeGraphService 监听地址
-    falkordb_url: str = "redis://localhost:6379"  # 同事换内核时用；stub 不连接
+    falkordb_url: str = "redis://localhost:6379"  # Graphiti 的图存在这里
     spool_dir: str = "./var/graph"       # ingest 观测 JSONL
     producer: str = "graph-service"      # Envelope.producer（ingest 侧读 trace 用）
     load_canned: bool = False            # 1 = 装罐装图；默认走 FalkorDB，一个 project 一张图

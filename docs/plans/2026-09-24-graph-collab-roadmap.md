@@ -1,6 +1,6 @@
 # Knowledge Graph 模块协作路线（2026-09-24）
 
-> 范围（仍有效）：知识图是 project 级的一张图，不按 agent 切开。节点是 `DOCUMENT`、`PAPER`、`CLAIM`、`CONCEPT`。agent 记忆不写入这张图。下文「`recalled` 仍为空」是 2026-09-24 当天的代码状态，不是现行结构。现行说明见 `docs/concepts.md` §4。
+> 范围（仍有效）：知识图是 project 级的一张图，不按 agent 切开。现行实现是 Graphiti（pip 包 `graphiti-core`）写在 FalkorDB 上，从正文抽出实体和关系。下文清单是 2026-09-24 的开工计划，不是现行结构。现行说明见 `docs/concepts.md` §4。
 
 > 背景：同事即将开始 Knowledge Graph 模块开发。本路线规划需要准备什么，
 > 以让同事第一天就能开工、双方并行不互堵。模式复用
@@ -67,8 +67,8 @@ John 建包，**按「同事将接手填充内核」的标准写**（同 memory 
 - [ ] `services/graph/config.py`：env 配置（`NATS_URL` / `GRAPH_GRPC_ADDR` /
       `FALKORDB_URL` 占位，风格对齐 `services/worker/config.py`）
 - [ ] `services/graph/server.py`：`grpc.aio` 实现 4 个 RPC，内存图 + BFS 子图查询
-- [ ] `services/graph/canned.py`：罐装图数据覆盖 4 种 NodeKind × 5 种 EdgeKind，
-      让 `QuerySubgraph` 的 depth/edge_kinds/max_nodes 过滤语义可测
+- [ ] `services/graph/canned.py`：罐装图数据覆盖 4 种节点，边上写示例关系名，
+      让 `QuerySubgraph` 的 depth/relations/max_nodes 过滤语义可测
 - [ ] `services/graph/ingest.py`（stub）：独立 durable 订阅 `memory.write.document`，
       落盘 JSONL + `TODO(colleague)` 标出 chunk / embed / extract / upsert 四步填实位置
 - [ ] `services/graph/client.py`：worker 用的薄客户端；KG 不可达 → 空结果降级，

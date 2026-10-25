@@ -15,7 +15,6 @@ import (
 	"github.com/Darth-S1d1ous/Termitaria/internal/bus"
 	"github.com/Darth-S1d1ous/Termitaria/internal/session"
 	"github.com/Darth-S1d1ous/Termitaria/internal/testutil"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func agent(id string) *sessionv1.Participant {
@@ -418,13 +417,6 @@ func TestDualAgentPingPongStopsAtMaxTurns(t *testing.T) {
 }
 
 func TestFormatKnowledgeUsesTheRelationFact(t *testing.T) {
-	props, err := structpb.NewStruct(map[string]any{
-		"relation": "PRICED_AT",
-		"fact":     "The brief prices the memo's wire at 4.80 dollars per kilogram.",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	_, text := formatKnowledge(&graphv1.QuerySubgraphResponse{
 		Nodes: []*graphv1.Node{{
 			NodeId: "p/memo/c0",
@@ -434,8 +426,8 @@ func TestFormatKnowledgeUsesTheRelationFact(t *testing.T) {
 		Edges: []*graphv1.Edge{{
 			FromNodeId: "p/report/c0",
 			ToNodeId:   "p/memo/c0",
-			Kind:       graphv1.EdgeKind_EDGE_KIND_RELATES,
-			Props:      props,
+			Relation:   "PRICED_AT",
+			Fact:       "The brief prices the memo's wire at 4.80 dollars per kilogram.",
 		}},
 	})
 	if !strings.Contains(text, "PRICED_AT:") || !strings.Contains(text, "4.80 dollars") {

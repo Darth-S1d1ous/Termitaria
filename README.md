@@ -22,7 +22,7 @@ Termitaria gives you not one smarter agent, but the tools to build **smarter org
 
 ### 2. Memory Layer — the colony remembers
 
-- **Knowledge Graph** (FalkorDB): one graph per project. Nodes are `DOCUMENT`, `PAPER`, `CLAIM`, and `CONCEPT`. Edges are citations, derivations, dependencies, support, and contradiction. Every agent in the project can read it. The graph is not split per agent.
+- **Knowledge Graph** (Graphiti on FalkorDB): one graph per project. Graphiti reads document text and extracts entities. Each edge has the name Graphiti chose and one fact sentence. Every agent in the project can read it. The graph is not split per agent. Install the library with `uv sync --extra memory` (`graphiti-core`).
 - **Agent memory**: one store per agent (role, rules, principles, episodes). A recall returns only that agent's items. It does not return another agent's memory, and it does not return graph nodes. Qdrant stores that agent's vectors. Postgres stores the items.
 
 ## Architecture
@@ -49,7 +49,7 @@ Go control plane for scheduling, sessions, and the gateway; Python intelligence 
 | LLM serving | **Nebius Token Factory** (OpenAI-compatible), model routing across **NVIDIA Nemotron** tiers — Super for daily interaction, Ultra for deep reasoning |
 | Control plane | Go · NATS JetStream |
 | Intelligence plane | Python · LangGraph |
-| Memory | FalkorDB, one graph per project · Postgres + Qdrant, one store per agent |
+| Memory | Graphiti on FalkorDB, one graph per project · Postgres + Qdrant, one store per agent |
 | Client | Next.js 15 · React · shadcn/ui · WebSocket streaming |
 
 ## Status

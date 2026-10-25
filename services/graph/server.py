@@ -1,4 +1,4 @@
-"""KnowledgeGraphService 的 grpc.aio 实现。存储经 GraphStore 注入。"""
+"""KnowledgeGraphService 的 grpc.aio 实现。图由 Graphiti 抽取。"""
 from __future__ import annotations
 
 import logging
@@ -7,50 +7,39 @@ import grpc
 
 from termitaria.graph.v1 import graph_pb2, graph_pb2_grpc
 
-from .store import GraphError, GraphStore
+from .graphiti_kg import node_text, project_from_seeds, project_of
 
 log = logging.getLogger(__name__)
 
-_STATUS = {
-    "GRAPH_NODE_NOT_FOUND": grpc.StatusCode.NOT_FOUND,
-    "GRAPH_INVALID_EDGE": grpc.StatusCode.INVALID_ARGUMENT,
-}
 
 class KnowledgeGraphServicer(graph_pb2_grpc.KnowledgeGraphServiceServicer):
-    def __init__(self, store: GraphStore) -> None:
-        self._store = store
+    def __init__(self, engine) -> None:
+        self._engine = engine
 
     async def UpsertNode(self, request, context):
-        node_id = await self._store.upsert_node(request.node)
-        return graph_pb2.UpsertNodeResponse(node_id=node_id)
+        node = request.node
+        project = project_of(node.node_id)
+        text = node_text(node)
+        if project and text:
+            self._engine.note(project, node.title or node.node_id, text)
+        return graph_pb2.UpsertNodeResponse(node_id=node.node_id)
 
     async def UpsertEdge(self, request, context):
-        try:
-            edge_id = await self._store.upsert_edge(request.edge)
-        except GraphError as exc:
-            await context.abort(_STATUS[exc.code], exc.code)
-        return graph_pb2.UpsertEdgeResponse(edge_id=edge_id)
+        # 边由 Graphiti 在抽实体时写下。调用方传来的结构边不进图。
+        return graph_pb2.UpsertEdgeResponse(edge_id=request.edge.edge_id)
 
     async def GetNode(self, request, context):
-        try:
-            node = await self._store.get_node(request.node_id)
-        except GraphError as exc:
-            await context.abort(_STATUS[exc.code], exc.code)
-        return graph_pb2.GetNodeResponse(node=node)
-        
-    async def QuerySubgraph(self, request, context):
-        resp = await self._store.query_subgraph(
-            list(request.seed_node_ids),
-            request.depth,
-            list(request.edge_kinds),
-            request.max_nodes,
-        )
-        return resp
+        await context.abort(grpc.StatusCode.NOT_FOUND, request.node_id)
 
-async def serve(cfg_addr: str, store: GraphStore):
+    async def QuerySubgraph(self, request, context):
+        project = project_from_seeds(list(request.seed_node_ids))
+        return await self._engine.subgraph(project)
+
+
+async def serve(cfg_addr: str, engine):
     server = grpc.aio.server()
     graph_pb2_grpc.add_KnowledgeGraphServiceServicer_to_server(
-        KnowledgeGraphServicer(store), server
+        KnowledgeGraphServicer(engine), server
     )
     server.add_insecure_port(cfg_addr)
     await server.start()

@@ -13,28 +13,10 @@ const KIND_COLOR: Record<string, string> = {
 
 const KINDS = ["CONCEPT", "DOCUMENT", "PAPER", "CLAIM"] as const;
 
-const EDGE_LABEL: Record<string, string> = {
-  CITES: "cites",
-  DERIVES_FROM: "derives from",
-  DEPENDS_ON: "depends on",
-  SUPPORTS: "supports",
-  CONTRADICTS: "contradicts",
-};
-
-function edgeLabel(kind: string) {
-  return EDGE_LABEL[kind] ?? kind.toLowerCase();
-}
-
 function linkPhrase(direction: "out" | "in", edge: ProjectGraphEdge) {
-  if (edge.label) return edge.label.toLowerCase().replace(/_/g, " ");
-  const kind = edge.kind;
-  if (direction === "out") return edgeLabel(kind);
-  if (kind === "DERIVES_FROM") return "derived claim";
-  if (kind === "CITES") return "cited by";
-  if (kind === "DEPENDS_ON") return "depended on by";
-  if (kind === "SUPPORTS") return "supported by";
-  if (kind === "CONTRADICTS") return "contradicted by";
-  return edgeLabel(kind);
+  if (direction === "in" && edge.relation === "CITES") return "cited by";
+  if (direction === "in" && edge.relation === "DERIVES_FROM") return "derived claim";
+  return (edge.relation || "link").toLowerCase().replace(/_/g, " ");
 }
 
 function neighborsOf(nodeId: string, nodes: ProjectGraphNode[], edges: ProjectGraphEdge[]) {
@@ -190,7 +172,7 @@ export function KnowledgeGraph({
             const b = pos.get(edge.target);
             if (!a || !b) return null;
             const hot = selected && (edge.source === selected.id || edge.target === selected.id);
-            const tone = edge.kind === "SUPPORTS" || edge.kind === "CONTRADICTS" || edge.kind === "RELATES" ? ` ${edge.kind.toLowerCase()}` : "";
+            const tone = edge.relation && edge.relation !== "CITES" && edge.relation !== "DERIVES_FROM" ? " named" : "";
             return (
               <line
                 key={edge.id}

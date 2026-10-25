@@ -28,7 +28,7 @@ Termitaria 是一个高度可定制的 multi-agent harness。复杂智力工作�
 | `SwarmSpec` | 声明式图：节点（agent 类型 + 记忆策略）、边（session 策略） |
 | `Session` | 两个 agent 之间一条可寻址、持久的会话；同一对可并发多条 |
 | `Task` | 一次推理工作项（上下文、预算、回调 stream） |
-| KG | 一个 project 一张 Knowledge Graph。节点 = `DOCUMENT` / `PAPER` / `CLAIM` / `CONCEPT`，边 = 引用 / 推导 / 依赖 / 支持 / 反驳。不按 agent 切开 |
+| KG | 一个 project 一张 Graphiti 图。Graphiti 从正文抽出实体和关系。不按 agent 切开 |
 | Agent Memory | 一个 agent 一份。只含该 agent 的 role、rules、principle、episode。召回不返回其他 agent 的条目，也不返回 KG 节点 |
 | Episode | 一次 session 结束后写入该 agent 自己的记忆。不写入 KG，也不写入其他 agent |
 | Turn | session 内一次发言权交接 |

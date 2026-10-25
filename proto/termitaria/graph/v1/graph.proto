@@ -14,17 +14,6 @@ enum NodeKind {
   NODE_KIND_CONCEPT = 4;
 }
 
-// EdgeKind：边类型（架构 §5.1：边 = 引用/推导/依赖）。
-enum EdgeKind {
-  EDGE_KIND_UNSPECIFIED = 0;
-  EDGE_KIND_CITES = 1;
-  EDGE_KIND_DERIVES_FROM = 2;
-  EDGE_KIND_DEPENDS_ON = 3;
-  EDGE_KIND_SUPPORTS = 4;
-  EDGE_KIND_CONTRADICTS = 5;
-  EDGE_KIND_RELATES = 6;   // 模型命名的事实关系。名字在 props.relation，事实在 props.fact。
-}
-
 // Node：FalkorDB 属性图节点。
 message Node {
   string node_id = 1;
@@ -35,12 +24,15 @@ message Node {
   int64 created_at_ms = 6;
 }
 
+// relation 是这条边的名字，fact 是一句事实。
+// 两者都由 Graphiti 在抽取实体时写下。
 message Edge {
   string edge_id = 1;
   string from_node_id = 2;
   string to_node_id = 3;
-  EdgeKind kind = 4;
+  string relation = 4;
   google.protobuf.Struct props = 5;
+  string fact = 6;
 }
 
 message UpsertNodeRequest {
@@ -71,7 +63,7 @@ message GetNodeResponse {
 message QuerySubgraphRequest {
   repeated string seed_node_ids = 1;
   uint32 depth = 2;                 // 扩展跳数
-  repeated EdgeKind edge_kinds = 3; // 空 = 不过滤
+  repeated string relations = 3; // 空 = 不过滤。值是边的 relation。
   uint32 max_nodes = 4;
 }
 

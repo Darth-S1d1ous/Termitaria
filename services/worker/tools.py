@@ -332,14 +332,14 @@ def make_toolbox(
             Tool(
                 "kg",
                 "Read or write this project's knowledge graph. action is query or write. "
-                "A write stores title and text on this project only. kind is claim or paper. "
-                "Query results include relation labels and the fact on each relation.",
+                "A write sends title and text to Graphiti, which extracts entities and relations. "
+                "Query lists those entities and each relation's name and fact.",
                 _kg(project_id),
                 {
                     "action": {"type": "string", "description": "query or write"},
                     "title": {"type": "string"},
                     "text": {"type": "string"},
-                    "kind": {"type": "string", "description": "claim or paper"},
+                    "kind": {"type": "string", "description": "unused; Graphiti reads title and text"},
                 },
                 ["action"],
             )
@@ -487,15 +487,10 @@ async def _kg_read(client, project_id: str) -> str:
     for edge in resp.edges:
         relation = ""
         fact = ""
-        if edge.props:
-            if "relation" in edge.props:
-                relation = str(edge.props["relation"])
-            if "fact" in edge.props:
-                fact = str(edge.props["fact"])
+        relation = edge.relation.strip()
         if not relation:
-            relation = graph_pb2.EdgeKind.Name(edge.kind).removeprefix("EDGE_KIND_")
-        if relation in {"CITES", "DERIVES_FROM", "UNSPECIFIED"}:
             continue
+        fact = edge.fact.strip()
         line = f"{relation}: {titles.get(edge.from_node_id, edge.from_node_id)} -> {titles.get(edge.to_node_id, edge.to_node_id)}"
         if fact:
             line = f"{line} — {fact[:240]}"
@@ -519,34 +514,22 @@ async def _kg_write(client, project_id: str, args: dict) -> str:
     text = str(args.get("text") or title).strip()
     if not title:
         return "kg write requires title"
-    kind_name = str(args.get("kind") or "claim").strip().lower()
-    kind = graph_pb2.NODE_KIND_PAPER if kind_name == "paper" else graph_pb2.NODE_KIND_CLAIM
     digest = hashlib.sha256(f"{project_id}\n{title}\n{text}".encode()).hexdigest()[:12]
-    local = "paper" if kind == graph_pb2.NODE_KIND_PAPER else "claim"
-    node_id = f"{project_id}/{local}_{digest}"
-    root_id = f"{project_id}/root"
+    node_id = f"{project_id}/note_{digest}"
     props = Struct()
     props.update({"text": text[:2000]})
     await client.upsert_node(
         graph_pb2.Node(
-            node_id=root_id,
+            node_id=node_id,
             kind=graph_pb2.NODE_KIND_CONCEPT,
-            title="Project sources",
-            props=Struct(),
+            title=title[:200],
+            props=props,
         )
     )
-    await client.upsert_node(
-        graph_pb2.Node(node_id=node_id, kind=kind, title=title[:200], props=props)
+    return (
+        "Sent this text to Graphiti for this project. "
+        "Entities and relations appear after extraction."
     )
-    await client.upsert_edge(
-        graph_pb2.Edge(
-            edge_id=f"{node_id}/cited",
-            from_node_id=root_id,
-            to_node_id=node_id,
-            kind=graph_pb2.EDGE_KIND_CITES,
-        )
-    )
-    return f"Stored {local} {node_id} on this project's knowledge graph."
 
 
 async def _web_search(args: dict) -> str:

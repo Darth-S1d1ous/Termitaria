@@ -163,20 +163,18 @@ view of the other.
 
 ### Knowledge Graph (one graph per project)
 
-A FalkorDB property graph. It exists for the project, independently of any
-chat stream and independently of any agent. Every agent in the project may
-read it. Agents in another project may not.
+A Graphiti graph stored in FalkorDB, one database per project. It exists
+for the project, independently of any chat stream and independently of any
+agent. Every agent in the project may read it. Agents in another project
+may not.
 
-**Nodes** are `DOCUMENT` (a file a user uploaded), `PAPER` (literature an
-agent found), `CLAIM` (a statement the ingest pipeline extracted), or
-`CONCEPT`. **Edges** are `CITES`, `DERIVES_FROM`, `DEPENDS_ON`, `SUPPORTS`,
-`CONTRADICTS`. File details such as author, year, and abstract sit in the
-node's `props`. The file body stays in object storage (`content_ref`) and
-does not ride the bus.
+Graphiti reads the document text and extracts entities. Each edge has the
+name Graphiti chose and one fact sentence. The source file body stays in
+object storage (`content_ref`) and does not ride the bus.
 
-Reads are subgraph queries around seed nodes (`QuerySubgraph`). The only
-writer is the ingest pipeline. The worker does not write the graph during
-inference.
+Reads are `QuerySubgraph` for that project. Writers send text: the ingest
+pipeline for uploaded documents, and the worker `kg` tool for a note. Graphiti
+does the extraction.
 
 ### Agent Memory (one store per agent)
 

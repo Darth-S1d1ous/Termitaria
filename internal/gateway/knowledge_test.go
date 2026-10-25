@@ -31,7 +31,7 @@ func TestGraphViewReadsProjectNodes(t *testing.T) {
 				EdgeId:     "p_north/memo/cited",
 				FromNodeId: "p_north/root",
 				ToNodeId:   "p_north/memo",
-				Kind:       graphv1.EdgeKind_EDGE_KIND_CITES,
+				Relation:   "LOCATED_IN",
 			},
 		},
 	})
@@ -41,26 +41,19 @@ func TestGraphViewReadsProjectNodes(t *testing.T) {
 	if view.Nodes[1].Kind != "DOCUMENT" || view.Nodes[1].Text != "The quote is 4.80 dollars per kilogram." {
 		t.Fatalf("document = %+v", view.Nodes[1])
 	}
-	if view.Edges[0].Kind != "CITES" || view.Edges[0].Source != "p_north/root" || view.Edges[0].Label != "" {
+	if view.Edges[0].Relation != "LOCATED_IN" || view.Edges[0].Source != "p_north/root" || view.Edges[0].Fact != "" {
 		t.Fatalf("edge = %+v", view.Edges[0])
-	}
-	fact, err := structpb.NewStruct(map[string]any{
-		"relation": "PRICED_AT",
-		"fact":     "The brief prices the wire at 4.80 dollars per kilogram.",
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	named := graphView("p_north", &graphv1.QuerySubgraphResponse{
 		Edges: []*graphv1.Edge{{
 			EdgeId:     "e1",
 			FromNodeId: "p_north/report/c0",
 			ToNodeId:   "p_north/memo/c0",
-			Kind:       graphv1.EdgeKind_EDGE_KIND_RELATES,
-			Props:      fact,
+			Relation:   "PRICED_AT",
+			Fact:       "The brief prices the wire at 4.80 dollars per kilogram.",
 		}},
 	})
-	if named.Edges[0].Kind != "RELATES" || named.Edges[0].Label != "PRICED_AT" {
+	if named.Edges[0].Relation != "PRICED_AT" {
 		t.Fatalf("named edge = %+v", named.Edges[0])
 	}
 	if named.Edges[0].Fact != "The brief prices the wire at 4.80 dollars per kilogram." {

@@ -911,9 +911,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .kg-body svg { width: 100%; height: 100%; display: block; }
 
 .kg-edge { stroke: #c5d0d8; stroke-width: 2; }
-.kg-edge.supports { stroke: #3d8b6e; }
-.kg-edge.contradicts { stroke: #c0392b; }
-.kg-edge.relates { stroke: #3390ec; }
+.kg-edge.named { stroke: #3390ec; }
 .kg-edge.hot { stroke-width: 3; }
 
 .kg-legend {

@@ -274,8 +274,7 @@ def test_orchestrator_asks_instead_of_stopping(monkeypatch):
 
 
 def test_kg_tool_stores_a_claim_and_reads_relations():
-    from google.protobuf.struct_pb2 import Struct
-
+    from services.graph.graphiti_kg import node_text
     from services.worker.tools import _kg_read, _kg_write
     from termitaria.graph.v1 import graph_pb2
 
@@ -292,8 +291,8 @@ def test_kg_tool_stores_a_claim_and_reads_relations():
             self.edges[edge.edge_id] = edge
             return edge.edge_id
 
-        async def query_subgraph(self, seeds, depth=1, edge_kinds=None, max_nodes=32, strict=False):
-            del seeds, depth, edge_kinds, max_nodes, strict
+        async def query_subgraph(self, seeds, depth=1, relations=None, max_nodes=32, strict=False):
+            del seeds, depth, relations, max_nodes, strict
             resp = graph_pb2.QuerySubgraphResponse()
             resp.nodes.extend(self.nodes.values())
             resp.edges.extend(self.edges.values())
@@ -306,23 +305,22 @@ def test_kg_tool_stores_a_claim_and_reads_relations():
             "p1",
             {"title": "Radar carrier", "text": "The carrier is 77 GHz.", "kind": "claim"},
         )
-        assert stored.startswith("Stored claim p1/claim_")
-        props = Struct()
-        props.update({"relation": "PRICED_AT", "fact": "The brief prices the wire at 4.80."})
-        await client.upsert_node(graph_pb2.Node(node_id="p1/report", kind=graph_pb2.NODE_KIND_CLAIM, title="Brief"))
-        await client.upsert_node(graph_pb2.Node(node_id="p1/memo", kind=graph_pb2.NODE_KIND_CLAIM, title="Memo"))
+        assert stored.startswith("Sent this text to Graphiti")
+        assert any("77 GHz" in node_text(node) for node in client.nodes.values())
+        await client.upsert_node(graph_pb2.Node(node_id="n1", kind=graph_pb2.NODE_KIND_CONCEPT, title="Northwire"))
+        await client.upsert_node(graph_pb2.Node(node_id="n2", kind=graph_pb2.NODE_KIND_CONCEPT, title="Houston quote"))
         await client.upsert_edge(
             graph_pb2.Edge(
-                edge_id="p1/rel",
-                from_node_id="p1/report",
-                to_node_id="p1/memo",
-                kind=graph_pb2.EDGE_KIND_RELATES,
-                props=props,
+                edge_id="e1",
+                from_node_id="n1",
+                to_node_id="n2",
+                relation="PRICED_AT",
+                fact="The brief prices the wire at 4.80.",
             )
         )
         text = await _kg_read(client, "p1")
         assert "77 GHz" in text
-        assert "PRICED_AT: Brief -> Memo — The brief prices the wire at 4.80." in text
+        assert "PRICED_AT: Northwire -> Houston quote — The brief prices the wire at 4.80." in text
         assert "CITES" not in text
 
     asyncio.run(run())

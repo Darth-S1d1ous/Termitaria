@@ -161,36 +161,11 @@ func shortTitle(title string) string {
 }
 
 func relationText(edge *graphv1.Edge) (string, string) {
-	label, fact := "", ""
-	if props := edge.GetProps(); props != nil {
-		values := props.AsMap()
-		if text, ok := values["relation"].(string); ok {
-			label = strings.TrimSpace(text)
-		}
-		if text, ok := values["fact"].(string); ok {
-			fact = strings.TrimSpace(text)
-		}
-	}
-	if label == "" {
-		label = relationName(edge.GetKind())
-	}
+	fact := strings.TrimSpace(edge.GetFact())
 	if len(fact) > 180 {
 		fact = fact[:180]
 	}
-	return label, fact
-}
-
-func relationName(kind graphv1.EdgeKind) string {
-	switch kind {
-	case graphv1.EdgeKind_EDGE_KIND_SUPPORTS:
-		return "SUPPORTS"
-	case graphv1.EdgeKind_EDGE_KIND_CONTRADICTS:
-		return "CONTRADICTS"
-	case graphv1.EdgeKind_EDGE_KIND_RELATES:
-		return "RELATES"
-	default:
-		return ""
-	}
+	return strings.TrimSpace(edge.GetRelation()), fact
 }
 
 func kindName(kind graphv1.NodeKind) string {

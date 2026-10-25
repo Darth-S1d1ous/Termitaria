@@ -113,7 +113,7 @@
 
 | 存储 | 范围 | 服务 | 内容 | 介质 | 读 |
 | --- | --- | --- | --- | --- | --- |
-| **Knowledge Graph** | 一个 project 一张图 | `KnowledgeGraphService` | 节点 = `DOCUMENT` / `PAPER` / `CLAIM` / `CONCEPT`；边 = 引用 / 推导 / 依赖 / 支持 / 反驳 | FalkorDB | `QuerySubgraph` |
+| **Knowledge Graph** | 一个 project 一张 Graphiti 图 | `KnowledgeGraphService` | Graphiti 从正文抽出实体，边的名字和事实由 Graphiti 写下 | FalkorDB | `QuerySubgraph` |
 | **Agent Memory** | 一个 agent 一份 | `MemoryService` | `ROLE` / `RULE` / `PRINCIPLE` / `EPISODE` | Postgres + Qdrant | 按种类过滤，再取 top_k |
 
 - 图按 project 建。这个 project 里的 agent 都能读这张图。另一个 project 的 agent 不能读。图不按 agent 切开。

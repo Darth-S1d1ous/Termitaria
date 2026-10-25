@@ -12,7 +12,7 @@ import nats
 from .config import GraphConfig
 from .ingest import Ingestor
 from .server import serve
-from .runtime_store import open_store
+from .runtime_store import open_engine
 
 
 async def amain() -> None:
@@ -20,11 +20,11 @@ async def amain() -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
     cfg = GraphConfig.from_env()
-    store = await open_store(cfg)
+    engine = await open_engine(cfg)
 
     nc = await nats.connect(cfg.nats_url, name="termitaria-graph")
-    server = await serve(cfg.grpc_addr, store)
-    ingestor = Ingestor(nc, cfg, store)
+    server = await serve(cfg.grpc_addr, engine)
+    ingestor = Ingestor(nc, cfg, engine)
     try:
         await asyncio.gather(server.wait_for_termination(), ingestor.run())
     finally:

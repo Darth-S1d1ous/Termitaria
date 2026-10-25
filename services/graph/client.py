@@ -19,7 +19,7 @@ class GraphClient:
         self,
         seed_node_ids: list[str],
         depth: int = 1,
-        edge_kinds: list[int] | None = None,
+        relations: list[str] | None = None,
         max_nodes: int = 32,
         strict: bool = False,
     ) -> graph_pb2.QuerySubgraphResponse:
@@ -28,7 +28,7 @@ class GraphClient:
         req = graph_pb2.QuerySubgraphRequest(
             seed_node_ids=seed_node_ids,
             depth=depth,
-            edge_kinds=edge_kinds or [],
+            relations=relations or [],
             max_nodes=max_nodes,
         )
         try:

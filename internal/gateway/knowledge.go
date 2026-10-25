@@ -51,12 +51,11 @@ type graphNodeJSON struct {
 }
 
 type graphEdgeJSON struct {
-	ID     string `json:"id"`
-	Source string `json:"source"`
-	Target string `json:"target"`
-	Kind   string `json:"kind"`
-	Label  string `json:"label,omitempty"`
-	Fact   string `json:"fact,omitempty"`
+	ID       string `json:"id"`
+	Source   string `json:"source"`
+	Target   string `json:"target"`
+	Relation string `json:"relation"`
+	Fact     string `json:"fact,omitempty"`
 }
 
 // projectGraph 把这个 project 的知识图交给页面。读的是 KnowledgeGraphService，不是 agent 记忆。
@@ -100,14 +99,12 @@ func graphView(projectID string, resp *graphv1.QuerySubgraphResponse) projectGra
 		})
 	}
 	for _, edge := range resp.GetEdges() {
-		label, fact := edgeRelation(edge)
 		out.Edges = append(out.Edges, graphEdgeJSON{
-			ID:     edge.GetEdgeId(),
-			Source: edge.GetFromNodeId(),
-			Target: edge.GetToNodeId(),
-			Kind:   edgeKindName(edge.GetKind()),
-			Label:  label,
-			Fact:   fact,
+			ID:       edge.GetEdgeId(),
+			Source:   edge.GetFromNodeId(),
+			Target:   edge.GetToNodeId(),
+			Relation: edge.GetRelation(),
+			Fact:     edge.GetFact(),
 		})
 	}
 	return out
@@ -135,36 +132,6 @@ func nodeKindName(kind graphv1.NodeKind) string {
 	default:
 		return "NODE"
 	}
-}
-
-func edgeKindName(kind graphv1.EdgeKind) string {
-	switch kind {
-	case graphv1.EdgeKind_EDGE_KIND_CITES:
-		return "CITES"
-	case graphv1.EdgeKind_EDGE_KIND_DERIVES_FROM:
-		return "DERIVES_FROM"
-	case graphv1.EdgeKind_EDGE_KIND_DEPENDS_ON:
-		return "DEPENDS_ON"
-	case graphv1.EdgeKind_EDGE_KIND_SUPPORTS:
-		return "SUPPORTS"
-	case graphv1.EdgeKind_EDGE_KIND_CONTRADICTS:
-		return "CONTRADICTS"
-	case graphv1.EdgeKind_EDGE_KIND_RELATES:
-		return "RELATES"
-	default:
-		return "EDGE"
-	}
-}
-
-func edgeRelation(edge *graphv1.Edge) (string, string) {
-	props := edge.GetProps()
-	if props == nil {
-		return "", ""
-	}
-	values := props.AsMap()
-	label, _ := values["relation"].(string)
-	fact, _ := values["fact"].(string)
-	return strings.TrimSpace(label), strings.TrimSpace(fact)
 }
 
 // publishDocument 把一份材料送进这个 project 的知识图。agent 记忆不收这份正文。
