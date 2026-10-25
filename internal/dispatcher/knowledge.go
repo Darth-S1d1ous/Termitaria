@@ -128,14 +128,23 @@ func writeRelations(b *strings.Builder, resp *graphv1.QuerySubgraphResponse) {
 	}
 	written := 0
 	for _, edge := range resp.GetEdges() {
-		label := relationName(edge.GetKind())
+		label, fact := relationText(edge)
 		if label == "" || b.Len() > 4000 {
 			continue
 		}
 		if written == 0 {
 			b.WriteString("\nRelations:")
 		}
-		fmt.Fprintf(b, "\n- %s: %s -> %s", label, shortTitle(titles[edge.GetFromNodeId()]), shortTitle(titles[edge.GetToNodeId()]))
+		fmt.Fprintf(
+			b,
+			"\n- %s: %s -> %s",
+			label,
+			shortTitle(titles[edge.GetFromNodeId()]),
+			shortTitle(titles[edge.GetToNodeId()]),
+		)
+		if fact != "" {
+			fmt.Fprintf(b, " — %s", fact)
+		}
 		written++
 		if written >= 12 {
 			break
@@ -151,12 +160,34 @@ func shortTitle(title string) string {
 	return title
 }
 
+func relationText(edge *graphv1.Edge) (string, string) {
+	label, fact := "", ""
+	if props := edge.GetProps(); props != nil {
+		values := props.AsMap()
+		if text, ok := values["relation"].(string); ok {
+			label = strings.TrimSpace(text)
+		}
+		if text, ok := values["fact"].(string); ok {
+			fact = strings.TrimSpace(text)
+		}
+	}
+	if label == "" {
+		label = relationName(edge.GetKind())
+	}
+	if len(fact) > 180 {
+		fact = fact[:180]
+	}
+	return label, fact
+}
+
 func relationName(kind graphv1.EdgeKind) string {
 	switch kind {
 	case graphv1.EdgeKind_EDGE_KIND_SUPPORTS:
 		return "SUPPORTS"
 	case graphv1.EdgeKind_EDGE_KIND_CONTRADICTS:
 		return "CONTRADICTS"
+	case graphv1.EdgeKind_EDGE_KIND_RELATES:
+		return "RELATES"
 	default:
 		return ""
 	}

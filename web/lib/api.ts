@@ -79,6 +79,8 @@ export type ProjectGraphEdge = {
   source: string;
   target: string;
   kind: string;
+  label?: string;
+  fact?: string;
 };
 
 export type ProjectGraph = {

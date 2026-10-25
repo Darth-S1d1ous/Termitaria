@@ -9,11 +9,13 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	commonv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/common/v1"
+	graphv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/graph/v1"
 	sessionv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/session/v1"
 	taskv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/task/v1"
 	"github.com/Darth-S1d1ous/Termitaria/internal/bus"
 	"github.com/Darth-S1d1ous/Termitaria/internal/session"
 	"github.com/Darth-S1d1ous/Termitaria/internal/testutil"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func agent(id string) *sessionv1.Participant {
@@ -412,6 +414,32 @@ func TestDualAgentPingPongStopsAtMaxTurns(t *testing.T) {
 	// 挂起后下一发言者（reviewer）不再入队。
 	if task, ok := fetchTask(t, b, "sw1", "reviewer"); ok {
 		t.Fatalf("挂起后不应再入队，却取到 reviewer task %s", task.GetTaskId())
+	}
+}
+
+func TestFormatKnowledgeUsesTheRelationFact(t *testing.T) {
+	props, err := structpb.NewStruct(map[string]any{
+		"relation": "PRICED_AT",
+		"fact":     "The brief prices the memo's wire at 4.80 dollars per kilogram.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, text := formatKnowledge(&graphv1.QuerySubgraphResponse{
+		Nodes: []*graphv1.Node{{
+			NodeId: "p/memo/c0",
+			Kind:   graphv1.NodeKind_NODE_KIND_CLAIM,
+			Title:  "Northwire quote",
+		}},
+		Edges: []*graphv1.Edge{{
+			FromNodeId: "p/report/c0",
+			ToNodeId:   "p/memo/c0",
+			Kind:       graphv1.EdgeKind_EDGE_KIND_RELATES,
+			Props:      props,
+		}},
+	})
+	if !strings.Contains(text, "PRICED_AT:") || !strings.Contains(text, "4.80 dollars") {
+		t.Fatalf("knowledge = %s", text)
 	}
 }
 

@@ -25,7 +25,9 @@ function edgeLabel(kind: string) {
   return EDGE_LABEL[kind] ?? kind.toLowerCase();
 }
 
-function linkPhrase(direction: "out" | "in", kind: string) {
+function linkPhrase(direction: "out" | "in", edge: ProjectGraphEdge) {
+  if (edge.label) return edge.label.toLowerCase().replace(/_/g, " ");
+  const kind = edge.kind;
   if (direction === "out") return edgeLabel(kind);
   if (kind === "DERIVES_FROM") return "derived claim";
   if (kind === "CITES") return "cited by";
@@ -188,7 +190,7 @@ export function KnowledgeGraph({
             const b = pos.get(edge.target);
             if (!a || !b) return null;
             const hot = selected && (edge.source === selected.id || edge.target === selected.id);
-            const kind = edge.kind === "SUPPORTS" || edge.kind === "CONTRADICTS" ? ` ${edge.kind.toLowerCase()}` : "";
+            const tone = edge.kind === "SUPPORTS" || edge.kind === "CONTRADICTS" || edge.kind === "RELATES" ? ` ${edge.kind.toLowerCase()}` : "";
             return (
               <line
                 key={edge.id}
@@ -196,7 +198,7 @@ export function KnowledgeGraph({
                 y1={a.y}
                 x2={b.x}
                 y2={b.y}
-                className={`kg-edge${kind}${hot ? " hot" : ""}`}
+                className={`kg-edge${tone}${hot ? " hot" : ""}`}
               />
             );
           })}
@@ -240,7 +242,10 @@ export function KnowledgeGraph({
                 {neighbors.map((item) => (
                   <li key={item.edge.id + item.direction}>
                     <button type="button" onClick={() => setSelectedId(item.node.id)}>
-                      <span>{linkPhrase(item.direction, item.edge.kind)}</span>
+                      <span>
+                        {linkPhrase(item.direction, item.edge)}
+                        {item.edge.fact ? ` — ${item.edge.fact}` : ""}
+                      </span>
                       <strong>{item.node.title || item.node.id}</strong>
                     </button>
                   </li>

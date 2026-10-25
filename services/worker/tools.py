@@ -6,6 +6,7 @@ delegate 对应 CrewAI 的 Delegate work to coworker，只是同事跑在另一�
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -327,7 +328,22 @@ def make_toolbox(
             )
         )
     if "kg_query" in names or "kg_write" in names or "kg" in names:
-        tools.append(Tool("kg", "The knowledge graph is not connected.", _kg))
+        tools.append(
+            Tool(
+                "kg",
+                "Read or write this project's knowledge graph. action is query or write. "
+                "A write stores title and text on this project only. kind is claim or paper. "
+                "Query results include relation labels and the fact on each relation.",
+                _kg(project_id),
+                {
+                    "action": {"type": "string", "description": "query or write"},
+                    "title": {"type": "string"},
+                    "text": {"type": "string"},
+                    "kind": {"type": "string", "description": "claim or paper"},
+                },
+                ["action"],
+            )
+        )
     if any(skill.name == "filings" for skill in skills) or "edgar" in names:
         tools.append(
             Tool(
@@ -432,8 +448,105 @@ def _mcp(remote: MCPTool) -> Runner:
     return run
 
 
-async def _kg(_: dict) -> str:
-    return "The knowledge graph is not connected. Do not pretend you queried it."
+def _kg(project_id: str) -> Runner:
+    async def run(args: dict) -> str:
+        action = str(args.get("action") or "query").strip().lower()
+        from services.graph.client import GraphClient
+
+        client = GraphClient(os.environ.get("GRAPH_GRPC_ADDR", "localhost:50051"), timeout_s=4)
+        try:
+            if action == "write":
+                return await _kg_write(client, project_id, args)
+            return await _kg_read(client, project_id)
+        except Exception as exc:
+            return f"The knowledge graph is not reachable: {exc}"
+        finally:
+            await client.close()
+
+    return run
+
+
+async def _kg_read(client, project_id: str) -> str:
+    from termitaria.graph.v1 import graph_pb2
+
+    resp = await client.query_subgraph([f"{project_id}/root"], depth=4, max_nodes=40, strict=True)
+    titles = {node.node_id: node.title or node.node_id for node in resp.nodes}
+    lines = []
+    for node in resp.nodes:
+        if node.node_id == f"{project_id}/root":
+            continue
+        kind = graph_pb2.NodeKind.Name(node.kind).removeprefix("NODE_KIND_").lower()
+        text = ""
+        if node.props and "text" in node.props:
+            text = str(node.props["text"])
+        line = f"{kind}: {node.title}"
+        if text and text != node.title:
+            line = f"{line} — {text[:240]}"
+        lines.append(line)
+    relations = []
+    for edge in resp.edges:
+        relation = ""
+        fact = ""
+        if edge.props:
+            if "relation" in edge.props:
+                relation = str(edge.props["relation"])
+            if "fact" in edge.props:
+                fact = str(edge.props["fact"])
+        if not relation:
+            relation = graph_pb2.EdgeKind.Name(edge.kind).removeprefix("EDGE_KIND_")
+        if relation in {"CITES", "DERIVES_FROM", "UNSPECIFIED"}:
+            continue
+        line = f"{relation}: {titles.get(edge.from_node_id, edge.from_node_id)} -> {titles.get(edge.to_node_id, edge.to_node_id)}"
+        if fact:
+            line = f"{line} — {fact[:240]}"
+        relations.append(line)
+    if not lines and not relations:
+        return "This project's knowledge graph has no nodes yet."
+    parts = []
+    if lines:
+        parts.append("Knowledge graph:\n" + "\n".join(f"- {line}" for line in lines))
+    if relations:
+        parts.append("Relations:\n" + "\n".join(f"- {line}" for line in relations))
+    return "\n".join(parts)
+
+
+async def _kg_write(client, project_id: str, args: dict) -> str:
+    from google.protobuf.struct_pb2 import Struct
+
+    from termitaria.graph.v1 import graph_pb2
+
+    title = str(args.get("title") or "").strip()
+    text = str(args.get("text") or title).strip()
+    if not title:
+        return "kg write requires title"
+    kind_name = str(args.get("kind") or "claim").strip().lower()
+    kind = graph_pb2.NODE_KIND_PAPER if kind_name == "paper" else graph_pb2.NODE_KIND_CLAIM
+    digest = hashlib.sha256(f"{project_id}\n{title}\n{text}".encode()).hexdigest()[:12]
+    local = "paper" if kind == graph_pb2.NODE_KIND_PAPER else "claim"
+    node_id = f"{project_id}/{local}_{digest}"
+    root_id = f"{project_id}/root"
+    props = Struct()
+    props.update({"text": text[:2000]})
+    await client.upsert_node(
+        graph_pb2.Node(
+            node_id=root_id,
+            kind=graph_pb2.NODE_KIND_CONCEPT,
+            title="Project sources",
+            props=Struct(),
+        )
+    )
+    await client.upsert_node(
+        graph_pb2.Node(node_id=node_id, kind=kind, title=title[:200], props=props)
+    )
+    await client.upsert_edge(
+        graph_pb2.Edge(
+            edge_id=f"{node_id}/cited",
+            from_node_id=root_id,
+            to_node_id=node_id,
+            kind=graph_pb2.EDGE_KIND_CITES,
+        )
+    )
+    return f"Stored {local} {node_id} on this project's knowledge graph."
 
 
 async def _web_search(args: dict) -> str:

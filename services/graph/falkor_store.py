@@ -29,6 +29,7 @@ _REL = {
     graph_pb2.EDGE_KIND_DEPENDS_ON: "DEPENDS_ON",
     graph_pb2.EDGE_KIND_SUPPORTS: "SUPPORTS",
     graph_pb2.EDGE_KIND_CONTRADICTS: "CONTRADICTS",
+    graph_pb2.EDGE_KIND_RELATES: "RELATES",
 }
 
 
@@ -121,11 +122,12 @@ class FalkorStore:
         rel = _REL.get(edge.kind)
         if not rel or not edge.edge_id:
             raise GraphError("GRAPH_INVALID_EDGE", "edge kind and id are required")
+        relation, fact = _edge_text(edge)
         found = self._graph(src).query(
             f"""
             MATCH (a {{node_id: $src}}), (b {{node_id: $dst}})
             MERGE (a)-[r:{rel} {{edge_id: $id}}]->(b)
-            SET r.kind = $kind
+            SET r.kind = $kind, r.relation = $relation, r.fact = $fact
             RETURN r.edge_id
             """,
             {
@@ -133,6 +135,8 @@ class FalkorStore:
                 "dst": edge.to_node_id,
                 "id": edge.edge_id,
                 "kind": int(edge.kind),
+                "relation": relation,
+                "fact": fact,
             },
         )
         if not found.result_set:
@@ -182,7 +186,7 @@ class FalkorStore:
             edges = graph.query(
                 """
                 MATCH (a)-[r]->(b)
-                RETURN r.edge_id, a.node_id, b.node_id, r.kind
+                RETURN r.edge_id, a.node_id, b.node_id, r.kind, r.relation, r.fact
                 """
             ).result_set
         except Exception:
@@ -240,10 +244,30 @@ def _node(row) -> graph_pb2.Node:
     )
 
 
+def _edge_text(edge: graph_pb2.Edge) -> tuple[str, str]:
+    relation = ""
+    fact = ""
+    if edge.props:
+        if "relation" in edge.props:
+            relation = str(edge.props["relation"])
+        if "fact" in edge.props:
+            fact = str(edge.props["fact"])
+    return relation, fact
+
+
 def _edge(row) -> graph_pb2.Edge:
+    props = Struct()
+    fields = {}
+    if len(row) > 4 and _text(row[4]):
+        fields["relation"] = _text(row[4])
+    if len(row) > 5 and _text(row[5]):
+        fields["fact"] = _text(row[5])
+    if fields:
+        props.update(fields)
     return graph_pb2.Edge(
         edge_id=_text(row[0]),
         from_node_id=_text(row[1]),
         to_node_id=_text(row[2]),
         kind=_num(row[3]),
+        props=props,
     )
