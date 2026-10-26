@@ -8,9 +8,11 @@ import {
   liveSocketURL,
   loadChats,
   loadMessages,
+  loadModels,
   loadProjects,
   loadSwarmSpecs,
   loadTopology,
+  type ModelOption,
   type SwarmSpecDoc,
 } from "../lib/api";
 import { AnimalIcon, markFor } from "../lib/animals";
@@ -73,6 +75,8 @@ export function AppShell() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [specs, setSpecs] = useState<SwarmSpecDoc[]>([]);
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [selectedModel, setSelectedModel] = useState("");
   const [seeds, setSeeds] = useState<Seed[]>([]);
   const [waiting, setWaiting] = useState<Record<string, boolean>>({});
   const [presence, setPresence] = useState<Record<string, string>>({});
@@ -161,6 +165,27 @@ export function AppShell() {
   }, []);
 
   useEffect(() => {
+    let cancel = false;
+    loadModels()
+      .then((data) => {
+        if (cancel) return;
+        const enabled = data.models.filter((item) => item.enabled);
+        setModels(enabled);
+        setSelectedModel((current) =>
+          current && enabled.some((item) => item.id === current)
+            ? current
+            : enabled.find((item) => item.id === data.default_id)?.id ?? enabled[0]?.id ?? "",
+        );
+      })
+      .catch(() => {
+        if (!cancel) setModels([]);
+      });
+    return () => {
+      cancel = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!projectId) {
       setChats([]);
       setChatId(null);
@@ -194,6 +219,12 @@ export function AppShell() {
       cancel = true;
     };
   }, [projectId]);
+
+  useEffect(() => {
+    if (!chatId || models.length === 0) return;
+    const saved = localStorage.getItem(`termitaria.model.${chatId}`);
+    setSelectedModel(saved && models.some((item) => item.id === saved) ? saved : models[0].id);
+  }, [chatId, models]);
 
   useEffect(() => {
     if (!projectId || !chatId) return;
@@ -395,6 +426,11 @@ export function AppShell() {
     }
   }
 
+  function onModelChange(id: string) {
+    setSelectedModel(id);
+    if (chatId) localStorage.setItem(`termitaria.model.${chatId}`, id);
+  }
+
   function onSend() {
     const text = draft.trim();
     const sock = wsRef.current;
@@ -425,6 +461,7 @@ export function AppShell() {
       chat_id: targetChatId,
       mention_agent_id: mentioned?.id ?? "",
       client_msg_id: clientMsgId,
+      model_id: selectedModel,
       text: sent,
     }));
   }
@@ -584,6 +621,9 @@ export function AppShell() {
           busy={Boolean(chat && waiting[chat.id])}
           error={chat ? error : ""}
           agents={project?.agents ?? []}
+          models={models}
+          model={selectedModel}
+          onModel={onModelChange}
           mention={chat?.kind === "channel" ? mention : null}
           onMention={setMention}
           presence={presence}
@@ -610,7 +650,7 @@ export function AppShell() {
           <header className="pane-header">
             <div className="pane-title">
               <h1>Artifacts</h1>
-              <p>Reports and decks from this project.</p>
+              <p>Reports, decks, and files written in this project.</p>
             </div>
             <ProjectPaneSwitch pane={projectPane} onChange={setProjectPane} />
           </header>
@@ -676,7 +716,7 @@ function ArtifactList({ project }: { project: Project }) {
       <div className="artifacts-body">
         <div className="empty">
           <strong>No artifacts</strong>
-          <p>Reports and decks from this project show up here.</p>
+          <p>Reports, decks, and files written in this project show up here.</p>
         </div>
       </div>
     );
@@ -686,7 +726,7 @@ function ArtifactList({ project }: { project: Project }) {
       <div className="deliverables" aria-label="Artifacts">
         {files.map((item) => {
           const deck = item.kind === "deck";
-          const label = deck ? "Deck" : "Report";
+          const label = deck ? "Deck" : item.kind === "file" ? "File" : "Report";
           const size = formatBytes(item.bytes);
           return (
             <a
@@ -744,6 +784,9 @@ function Conversation({
   busy,
   error,
   agents,
+  models,
+  model,
+  onModel,
   mention,
   onMention,
   presence,
@@ -762,6 +805,9 @@ function Conversation({
   busy: boolean;
   error: string;
   agents: Project["agents"];
+  models: ModelOption[];
+  model: string;
+  onModel: (id: string) => void;
   mention: string | null;
   onMention: (agentId: string | null) => void;
   presence: Record<string, string>;
@@ -908,6 +954,22 @@ function Conversation({
               </button>
             ))}
           </div>
+        ) : null}
+        {models.length > 0 ? (
+          <select
+            className="model-select"
+            aria-label="Model"
+            title="Model for the next reply"
+            value={model}
+            disabled={!chat.enabled || busy}
+            onChange={(event) => onModel(event.target.value)}
+          >
+            {models.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
         ) : null}
         <textarea
           ref={boxRef}

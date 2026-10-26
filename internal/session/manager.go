@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	commonv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/common/v1"
 	sessionv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/session/v1"
 	"github.com/Darth-S1d1ous/Termitaria/internal/bus"
 	"github.com/nats-io/nats.go/jetstream"
@@ -65,11 +66,28 @@ func (m *Manager) AppendMessage(
 	clientMsgID,
 	traceID string,
 ) (*sessionv1.Message, error) {
+	return m.AppendMessageWithModel(ctx, sessionID, from, content, replyTo, clientMsgID, traceID, nil)
+}
+
+// AppendMessageWithModel 给用户消息带上本轮选择的模型；nil 表示用 agent 默认模型。
+func (m *Manager) AppendMessageWithModel(
+	ctx context.Context,
+	sessionID string,
+	from *sessionv1.Participant,
+	content []*sessionv1.ContentBlock,
+	replyTo,
+	clientMsgID,
+	traceID string,
+	model *commonv1.ModelRef,
+) (*sessionv1.Message, error) {
 	a, err := m.getOrRecover(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	cmd := appendCmd{from: from, content: content, replyTo: replyTo, clientMsgID: clientMsgID, traceID: traceID, result: make(chan appendResult, 1)}
+	cmd := appendCmd{
+		from: from, content: content, replyTo: replyTo, clientMsgID: clientMsgID,
+		traceID: traceID, model: model, result: make(chan appendResult, 1),
+	}
 	a.mailbox <- cmd
 	select {
 	case r := <-cmd.result:

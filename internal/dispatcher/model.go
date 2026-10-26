@@ -12,10 +12,15 @@ import (
 // 预算取 MODEL_MAX_TOKENS（默认 16384）。
 func FromEnv() AgentConfig {
 	name := envOr("NVIDIA_MODEL", "stub-model")
-	provider := "nebius-token-factory"
+	provider := os.Getenv("MODEL_PROVIDER")
+	if provider == "" {
+		provider = "nebius-token-factory"
+		if name != "stub-model" {
+			provider = "nvidia"
+		}
+	}
 	maxTokens := uint32(512)
 	if name != "stub-model" {
-		provider = "nvidia"
 		if n := envOrUint64("MODEL_MAX_TOKENS", 16384); n > 0 && n <= uint64(^uint32(0)) {
 			maxTokens = uint32(n)
 		}

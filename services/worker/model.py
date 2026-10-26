@@ -112,10 +112,17 @@ class StubModel:
 
 
 def select_model(cfg: ModelConfig | None = None):
-    """按 provider 装配。未指定时与原来一样：有 NVIDIA key 走 Catalog，否则 StubModel。"""
-    from .adapters import build_model
+    """按 provider 装配。未指定时与原来一样：有 NVIDIA key 走 Catalog，否则 StubModel。
 
-    return build_model(cfg or ModelConfig())
+    MODEL_CLOUD_ENABLED=1 时返回 RoutingModel，按 task 的 ModelRef.provider 路由；
+    默认仍是进程级 provider，所以 DeepSeek 测试不会碰到 Nebius/NVIDIA。
+    """
+    from .adapters import RoutingModel, build_model, cloud_enabled
+
+    cfg = cfg or ModelConfig()
+    if cloud_enabled():
+        return RoutingModel(cfg)
+    return build_model(cfg)
 
 
 def _split_chunks(text: str, n: int) -> list[str]:

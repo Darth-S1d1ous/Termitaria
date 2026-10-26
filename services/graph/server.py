@@ -50,7 +50,12 @@ class KnowledgeGraphServicer(graph_pb2_grpc.KnowledgeGraphServiceServicer):
 
     async def QuerySubgraph(self, request, context):
         project = project_from_seeds(list(request.seed_node_ids))
-        return await self._engine.subgraph(project)
+        return await self._engine.subgraph(
+            project,
+            seed_node_ids=list(request.seed_node_ids),
+            depth=int(request.depth),
+            max_nodes=int(request.max_nodes),
+        )
 
 
 async def serve(cfg_addr: str, engine, nc=None):

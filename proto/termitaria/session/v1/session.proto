@@ -84,6 +84,8 @@ message Message {
   string reply_to_message_id = 5;
   uint32 turn_index = 6;
   int64 created_at_ms = 7;
+  // model 是用户为这一轮选择的模型。空 = 用 agent 的默认模型。
+  common.v1.ModelRef model = 8;
 }
 
 // ---- sessions.* 流上的事件（Envelope.payload 的反序列化目标）----

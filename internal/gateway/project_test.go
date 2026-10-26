@@ -369,6 +369,24 @@ func postArtifact(t *testing.T, base, projectID, name, kind string, raw []byte) 
 	res.Body.Close()
 }
 
+func TestFileArtifactIsDownloadable(t *testing.T) {
+	srv, _ := testServer(t)
+	httpSrv := httptest.NewServer(srv.Handler())
+	t.Cleanup(httpSrv.Close)
+	created := createField(t, httpSrv.URL)
+	raw := []byte("# Protocol v5\n\nDesign of record.\n")
+	postArtifact(t, httpSrv.URL, created.ID, "protocol_v5.md", "file", raw)
+	res, err := http.Get(httpSrv.URL + "/api/projects/" + created.ID + "/artifacts/protocol_v5.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 || string(body) != string(raw) {
+		t.Fatalf("status = %d body = %q", res.StatusCode, body)
+	}
+}
+
 func TestUploadKnowledgeWhileTheProjectExists(t *testing.T) {
 	srv, _ := testServer(t)
 	httpSrv := httptest.NewServer(srv.Handler())

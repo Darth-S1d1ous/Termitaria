@@ -9,10 +9,15 @@ from __future__ import annotations
 import logging
 import os
 
-from .model import DEFAULT_MAX_TOKENS, ModelConfig, StubModel
+from .model import DEFAULT_MAX_TOKENS, ModelConfig, ModelPort, StubModel
 from .openai_chat import OpenAIChatModel
 
 _log = logging.getLogger(__name__)
+
+
+def cloud_enabled() -> bool:
+    """Cloud providers stay dormant until explicitly enabled; tests must not spend credit."""
+    return os.environ.get("MODEL_CLOUD_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class NvidiaAdapter:
@@ -100,3 +105,52 @@ def _deepseek_name(name: str, default: str) -> str:
     if not name or name == "stub-model" or "/" in name:
         return default
     return name
+
+
+class RoutingModel:
+    """Pick a provider per task from ModelRef.provider.
+
+    The process default stays exactly as before. A different provider is built
+    lazily, so a DeepSeek-only test never touches Nebius or NVIDIA. Cloud
+    providers refuse to start unless MODEL_CLOUD_ENABLED is on.
+    """
+
+    def __init__(self, cfg: ModelConfig) -> None:
+        self._cfg = cfg
+        self._ports: dict[str, ModelPort] = {}
+        self.provider = (cfg.provider or "router").strip().lower() or "router"
+        self.default_model = cfg.model
+        self._default_provider = (cfg.provider or "").strip().lower() or "nvidia"
+
+    def _build(self, provider: str) -> ModelPort:
+        provider = (provider or "").strip().lower() or self._default_provider
+        if provider == self._default_provider:
+            return build_model(self._cfg)
+        if provider == "deepseek":
+            return DeepseekAdapter().create(self._cfg)
+        if provider in {"nebius", "nebius-token-factory"}:
+            if not cloud_enabled():
+                raise RuntimeError("Nebius models are disabled; set MODEL_CLOUD_ENABLED=1")
+            return NebiusAdapter().create(self._cfg)
+        if provider == "nvidia":
+            if not cloud_enabled():
+                raise RuntimeError("NVIDIA models are disabled; set MODEL_CLOUD_ENABLED=1")
+            return NvidiaAdapter().create(self._cfg)
+        raise ValueError(f"unknown model provider {provider}")
+
+    def _port(self, provider: str) -> ModelPort:
+        key = (provider or "").strip().lower() or self._default_provider
+        if key not in self._ports:
+            self._ports[key] = self._build(key)
+        return self._ports[key]
+
+    async def stream(self, *, system: str, window, model, max_tokens: int, tools: list | None = None):
+        port = self._port(model.provider)
+        async for event in port.stream(
+            system=system,
+            window=window,
+            model=model,
+            max_tokens=max_tokens,
+            tools=tools,
+        ):
+            yield event

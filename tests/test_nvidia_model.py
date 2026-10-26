@@ -139,5 +139,6 @@ def test_native_tool_chunks_become_calls():
     assert calls[0].arguments == {"query": "tsla"}
 
 
-def test_select_model_without_key_is_stub():
+def test_select_model_without_key_is_stub(monkeypatch):
+    monkeypatch.delenv("MODEL_CLOUD_ENABLED", raising=False)
     assert isinstance(select_model(), StubModel)

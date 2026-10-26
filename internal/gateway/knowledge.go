@@ -87,6 +87,7 @@ func (s *Server) projectGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	view := graphView(id, resp)
 	attachUploads(&view, id, s.projectSeeds(id))
+	mergeDocuments(&view)
 	writeJSON(w, http.StatusOK, view)
 }
 
@@ -200,6 +201,82 @@ func attachUploads(view *projectGraphJSON, projectID string, seeds []seedJSON) {
 			Text:  seed.Body,
 		})
 	}
+}
+
+// mergeDocuments keeps one node per document title. Graphiti can return an
+// Episodic document and a Concept with the same file name, and an upload can
+// add a third node. The node with the longest text wins and links move to it.
+func mergeDocuments(view *projectGraphJSON) {
+	if view == nil || len(view.Nodes) < 2 {
+		return
+	}
+	winners := map[string]int{}
+	for i, node := range view.Nodes {
+		if node.Kind != "DOCUMENT" {
+			continue
+		}
+		key := documentKey(node.Title)
+		if key == "" {
+			continue
+		}
+		current, ok := winners[key]
+		if !ok || len(node.Text) > len(view.Nodes[current].Text) {
+			winners[key] = i
+		}
+	}
+	if len(winners) == 0 {
+		return
+	}
+	remap := map[string]string{}
+	keep := make([]bool, len(view.Nodes))
+	for i := range keep {
+		keep[i] = true
+	}
+	for i, node := range view.Nodes {
+		if node.Kind != "DOCUMENT" && node.Kind != "CONCEPT" {
+			continue
+		}
+		winner, ok := winners[documentKey(node.Title)]
+		if !ok || i == winner {
+			continue
+		}
+		remap[node.ID] = view.Nodes[winner].ID
+		keep[i] = false
+	}
+	if len(remap) == 0 {
+		return
+	}
+	nodes := make([]graphNodeJSON, 0, len(view.Nodes)-len(remap))
+	for i, node := range view.Nodes {
+		if keep[i] {
+			nodes = append(nodes, node)
+		}
+	}
+	edges := make([]graphEdgeJSON, 0, len(view.Edges))
+	seen := map[string]bool{}
+	for _, edge := range view.Edges {
+		if to, ok := remap[edge.Source]; ok {
+			edge.Source = to
+		}
+		if to, ok := remap[edge.Target]; ok {
+			edge.Target = to
+		}
+		if edge.Source == edge.Target {
+			continue
+		}
+		key := edge.Source + "\x00" + edge.Target + "\x00" + edge.Relation + "\x00" + edge.Fact
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		edges = append(edges, edge)
+	}
+	view.Nodes = nodes
+	view.Edges = edges
+}
+
+func documentKey(title string) string {
+	return strings.ToLower(strings.Join(strings.Fields(title), " "))
 }
 
 func graphView(projectID string, resp *graphv1.QuerySubgraphResponse) projectGraphJSON {

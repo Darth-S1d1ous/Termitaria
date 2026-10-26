@@ -12,6 +12,7 @@ import (
 	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
 
+	commonv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/common/v1"
 	sessionv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/session/v1"
 	"github.com/Darth-S1d1ous/Termitaria/internal/bus"
 )
@@ -33,6 +34,7 @@ type appendCmd struct {
 	replyTo     string
 	clientMsgID string
 	traceID     string
+	model       *commonv1.ModelRef
 	result      chan appendResult
 }
 
@@ -223,6 +225,7 @@ func (a *Actor) append(ctx context.Context, c appendCmd) (*sessionv1.Message, er
 		ReplyToMessageId: c.replyTo,
 		TurnIndex:        a.state.GetTurnIndex(),
 		CreatedAtMs:      time.Now().UnixMilli(),
+		Model:            c.model,
 	}
 	if err := a.publish(ctx, c.traceID, &sessionv1.SessionEvent{Event: &sessionv1.SessionEvent_MessageAppended{
 		MessageAppended: &sessionv1.MessageAppended{Message: msg},

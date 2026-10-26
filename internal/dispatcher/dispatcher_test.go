@@ -438,6 +438,7 @@ func TestFormatKnowledgeUsesTheRelationFact(t *testing.T) {
 func TestFromEnv(t *testing.T) {
 	t.Setenv("NVIDIA_MODEL", "")
 	t.Setenv("MODEL_MAX_TOKENS", "")
+	t.Setenv("MODEL_PROVIDER", "")
 	stub := FromEnv()
 	if stub.Model.GetProvider() != "nebius-token-factory" || stub.Model.GetModel() != "stub-model" {
 		t.Fatalf("unset model = %s/%s", stub.Model.GetProvider(), stub.Model.GetModel())
@@ -460,5 +461,10 @@ func TestFromEnv(t *testing.T) {
 	capped := FromEnv()
 	if capped.Budget.GetMaxTokens() != 2048 {
 		t.Fatalf("MODEL_MAX_TOKENS = %d, want 2048", capped.Budget.GetMaxTokens())
+	}
+
+	t.Setenv("MODEL_PROVIDER", "deepseek")
+	if got := FromEnv().Model.GetProvider(); got != "deepseek" {
+		t.Fatalf("MODEL_PROVIDER = %q", got)
 	}
 }

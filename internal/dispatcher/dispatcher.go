@@ -214,6 +214,10 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 		log.Printf("agent %q 不在 registry，跳过（MVP 静态配置；Scheduler 落地后消失）", agentID)
 		return nil
 	}
+	model := cfg.Model
+	if selected := msg.GetModel(); selected.GetModel() != "" {
+		model = selected
+	}
 	recalled, err := d.recall(ctx, agentID, messageText(msg), traceID)
 	if err != nil {
 		log.Printf("memory.recall agent=%s: %v（保持角色条目）", agentID, err)
@@ -244,7 +248,7 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 		TriggerMessageId: triggerID,
 		Context:          context,
 		Budget:           cfg.Budget,
-		Model:            cfg.Model,
+		Model:            model,
 		DeltaSubject:     bus.TaskDelta(ev.GetSwarmId(), taskID),
 		EnqueuedAtMs:     time.Now().UnixMilli(),
 	}

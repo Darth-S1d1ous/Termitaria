@@ -208,6 +208,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("GET /api/swarmspecs", s.listSpecs)
+	mux.HandleFunc("GET /api/models", s.listModels)
 	mux.HandleFunc("GET /api/projects", s.listProjects)
 	mux.HandleFunc("POST /api/projects", s.createProject)
 	mux.HandleFunc("DELETE /api/projects/{id}", s.deleteProject)
@@ -505,6 +506,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Text           string `json:"text"`
 		MentionAgentID string `json:"mention_agent_id"`
+		ModelID        string `json:"model_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "bad json")
@@ -524,15 +526,20 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		writeSendError(w, err)
 		return
 	}
+	model, err := resolveModel(body.ModelID)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
 	sessionID, err := s.ensureSession(r.Context(), projectID, key, agentID)
 	if err != nil {
 		writeError(w, 502, err.Error())
 		return
 	}
-	userMsg, err := s.manager.AppendMessage(r.Context(), sessionID,
+	userMsg, err := s.manager.AppendMessageWithModel(r.Context(), sessionID,
 		&sessionv1.Participant{Kind: &sessionv1.Participant_UserId{UserId: userID}},
 		[]*sessionv1.ContentBlock{{Block: &sessionv1.ContentBlock_Text{Text: text}}},
-		"", ulid.Make().String(), "")
+		"", ulid.Make().String(), "", model)
 	if err != nil {
 		status := 502
 		if errors.Is(err, session.ErrNotYourTurn) {

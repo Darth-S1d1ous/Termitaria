@@ -6,7 +6,7 @@ import asyncio
 import services
 from termitaria.graph.v1 import graph_pb2
 
-from services.graph.graphiti_kg import group_id, project_from_seeds, to_subgraph
+from services.graph.graphiti_kg import group_id, project_from_seeds, select_subgraph, to_subgraph
 from services.graph.server import KnowledgeGraphServicer
 
 
@@ -37,6 +37,50 @@ def test_subgraph_uses_graphiti_names_and_facts():
     assert resp.edges[0].fact.startswith("Northwire priced")
 
 
+def test_episodes_map_to_document_nodes():
+    resp = to_subgraph(
+        [
+            {"id": "d1", "name": "report.md", "text": "Report body", "kind": "DOCUMENT"},
+            {"id": "n1", "name": "GPQA", "summary": "A benchmark.", "kind": "CONCEPT"},
+        ],
+        [],
+    )
+    assert resp.nodes[0].kind == graph_pb2.NODE_KIND_DOCUMENT
+    assert resp.nodes[0].props["text"] == "Report body"
+    assert resp.nodes[1].kind == graph_pb2.NODE_KIND_CONCEPT
+
+
+def test_select_subgraph_keeps_documents_under_a_cap():
+    nodes = [
+        {"id": "d1", "name": "report.md", "text": "Report body", "kind": "DOCUMENT"},
+        {"id": "n1", "name": "A", "summary": "a", "kind": "CONCEPT"},
+        {"id": "n2", "name": "B", "summary": "b", "kind": "CONCEPT"},
+    ]
+    edges = [
+        {"id": "e1", "source": "n1", "target": "n2", "name": "LINKS", "fact": ""},
+        {"id": "e2", "source": "d1", "target": "n1", "name": "MENTIONS", "fact": ""},
+    ]
+    kept, kept_edges = select_subgraph(nodes, edges, ["p/root"], depth=4, max_nodes=2)
+    assert [node["id"] for node in kept] == ["d1", "n1"]
+    assert [edge["id"] for edge in kept_edges] == ["e2"]
+
+
+def test_select_subgraph_walks_from_a_seed():
+    nodes = [
+        {"id": "n1", "name": "A", "summary": "a", "kind": "CONCEPT"},
+        {"id": "n2", "name": "B", "summary": "b", "kind": "CONCEPT"},
+        {"id": "n3", "name": "C", "summary": "c", "kind": "CONCEPT"},
+    ]
+    edges = [
+        {"id": "e1", "source": "n1", "target": "n2", "name": "LINKS", "fact": ""},
+        {"id": "e2", "source": "n2", "target": "n3", "name": "LINKS", "fact": ""},
+    ]
+    kept, _ = select_subgraph(nodes, edges, ["p/n1"], depth=1)
+    assert {node["id"] for node in kept} == {"n1", "n2"}
+    empty, _ = select_subgraph(nodes, edges, ["p/missing"], depth=1)
+    assert empty == []
+
+
 def test_upsert_queues_a_document_and_query_reads_that_project():
     from services.common import envelope
     from termitaria.memory.v1 import memory_pb2
@@ -48,8 +92,9 @@ def test_upsert_queues_a_document_and_query_reads_that_project():
         async def add_text(self, project, name, text):
             self.notes.append((project, name, text))
 
-        async def subgraph(self, project):
+        async def subgraph(self, project, seed_node_ids=None, depth=0, max_nodes=0):
             assert project == "p_desk"
+            assert seed_node_ids == ["p_desk/root"]
             return to_subgraph(
                 [{"id": "n1", "name": "Northwire", "summary": "A wire seller."}],
                 [],

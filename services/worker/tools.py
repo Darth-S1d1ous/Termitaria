@@ -273,6 +273,7 @@ def make_toolbox(
     if kind != "ORCHESTRATOR":
         names.update(_WORKER_BASE)
         names.discard("delegate")
+    names.add("read_file")
     if "web_search" in names:
         names.add("fetch_url")
         names.add("utc_time")
@@ -316,13 +317,22 @@ def make_toolbox(
     if "write_file" in names:
         tools.append(Tool(
             "write_file",
-            "Write content to path inside the working directory, for example notes.md.",
-            _write_file,
+            "Write content to path inside the working directory, for example notes.md. "
+            "The file is also stored in the project's Artifacts tab.",
+            _write_file(gateway, project_id),
             {
                 "path": {"type": "string"},
                 "content": {"type": "string"},
             },
             ["path", "content"],
+        ))
+    if "read_file" in names:
+        tools.append(Tool(
+            "read_file",
+            "Read a text file inside the working directory, for example protocol_v5.md or a file another agent wrote.",
+            _read_file,
+            {"path": {"type": "string"}},
+            ["path"],
         ))
     if kind == "ORCHESTRATOR" and "delegate" in names:
         tools.append(
@@ -641,25 +651,80 @@ async def _fetch_url(args: dict) -> str:
     return await asyncio.to_thread(_fetch_blocking, url, section)
 
 
-async def _write_file(args: dict) -> str:
-    path = str(args.get("path") or "").strip()
-    content = args.get("content")
-    if not path or content is None:
-        return "write_file requires path and content"
-    return _write_blocking(path, str(content))
+_MAX_READ_CHARS = 40_000
 
 
-def _write_blocking(path: str, content: str) -> str:
+def _work_path(path: str) -> tuple[Path | None, str]:
     root = Path(os.environ.get("WORK_DIR", os.getcwd())).resolve()
     target = Path(path)
     if not target.is_absolute():
         target = root / target
     target = target.resolve()
     if target != root and root not in target.parents:
-        return f"Refused to write {target}. Only paths inside {root} are allowed."
+        return None, f"Only paths inside {root} are allowed."
+    return target, ""
+
+
+def _write_file(gateway: str = "", project_id: str = "") -> Runner:
+    async def run(args: dict) -> str:
+        path = str(args.get("path") or "").strip()
+        content = args.get("content")
+        if not path or content is None:
+            return "write_file requires path and content"
+        text = str(content)
+        result = await asyncio.to_thread(_write_blocking, path, text)
+        if not result.startswith("Wrote ") or not gateway or not project_id:
+            return result
+        name = Path(path).name
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}", name):
+            return result
+        stored = await asyncio.to_thread(
+            _store_artifact, gateway, project_id, name, "file", text.encode("utf-8")
+        )
+        return f"{result}\n{stored}"
+
+    return run
+
+
+def _write_blocking(path: str, content: str) -> str:
+    target, problem = _work_path(path)
+    if problem:
+        return f"Refused to write {path}. {problem}"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return f"Wrote {target} ({len(content)} characters)."
+
+
+async def _read_file(args: dict) -> str:
+    path = str(args.get("path") or "").strip()
+    if not path:
+        return "read_file requires path"
+    return await asyncio.to_thread(_read_blocking, path)
+
+
+def _read_blocking(path: str) -> str:
+    target, problem = _work_path(path)
+    if problem:
+        return f"Refused to read {path}. {problem}"
+    root = Path(os.environ.get("WORK_DIR", os.getcwd())).resolve()
+    parts = target.relative_to(root).parts
+    if any(part.startswith(".") for part in parts):
+        return f"Refused to read hidden path {path}."
+    if parts and parts[0] in {"var", "node_modules"}:
+        return f"Refused to read {path}. That path is not a working draft."
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except IsADirectoryError:
+        return f"{target} is a directory, not a text file."
+    except FileNotFoundError:
+        return f"No file at {target}."
+    except OSError as exc:
+        return f"Could not read {target}: {exc}"
+    if "\x00" in text:
+        return f"{target} is not a text file."
+    if len(text) > _MAX_READ_CHARS:
+        return text[:_MAX_READ_CHARS] + f"\n\n[truncated: {len(text)} characters total]"
+    return text
 
 
 def _search_key() -> str:

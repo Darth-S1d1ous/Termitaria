@@ -503,6 +503,23 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 .composer textarea:disabled { color: var(--faint); }
 
+.model-select {
+  flex: none;
+  align-self: flex-end;
+  height: 42px;
+  max-width: 190px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--ink);
+  padding: 0 10px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.model-select:disabled { color: var(--faint); cursor: default; }
+
 .send {
   width: 42px;
   height: 42px;

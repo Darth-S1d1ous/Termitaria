@@ -5,6 +5,8 @@ import type { SwarmSpecDoc } from "../lib/api";
 import type { Seed, SeedKind } from "../lib/seeds";
 
 const STEPS = ["Name", "Team", "Knowledge"] as const;
+const TEXT_FILE = /\.(txt|md|markdown|csv|json|tsv|log|yaml|yml|html|xml|tex)$/i;
+const MAX_TEXT_SEED = 20000;
 
 export function NewProject({
   specs,
@@ -48,17 +50,31 @@ export function NewProject({
     ]);
   }
 
-  function addFiles(list: FileList | null, kind: "file" | "image") {
+  async function addFiles(list: FileList | null, kind: "file" | "image") {
     if (!list) return;
-    const next: Seed[] = [];
-    for (const file of list) {
-      next.push({
-        id: crypto.randomUUID(),
-        kind: file.type.startsWith("image/") ? "image" : kind,
-        title: file.name,
-        body: file.type || kind,
-      });
-    }
+    const next = await Promise.all(
+      Array.from(list).map(async (file): Promise<Seed> => {
+        const image = file.type.startsWith("image/");
+        const textLike =
+          !image &&
+          (!file.type || file.type.startsWith("text/") || file.type === "application/json" ||
+            file.type === "application/xml" || TEXT_FILE.test(file.name));
+        let body = file.type || kind;
+        if (textLike) {
+          try {
+            body = (await file.text()).slice(0, MAX_TEXT_SEED);
+          } catch {
+            body = file.type || kind;
+          }
+        }
+        return {
+          id: crypto.randomUUID(),
+          kind: image ? "image" : kind,
+          title: file.name,
+          body,
+        };
+      }),
+    );
     setSeeds((current) => [...current, ...next]);
   }
 
@@ -153,7 +169,7 @@ export function NewProject({
       {step === 2 && (
         <div className="knowledge">
           <p className="slot-hint">
-            Add notes, links, files, or images. They stay with this project. The graph database is not connected yet.
+            Add notes, links, files, or images. They stay with this project and its knowledge graph.
           </p>
           <label className="name-field">
             <span>Text</span>
@@ -212,7 +228,7 @@ export function NewProject({
               hidden
               aria-label="Knowledge files"
               onChange={(event) => {
-                addFiles(event.target.files, "file");
+                void addFiles(event.target.files, "file");
                 event.target.value = "";
               }}
             />
@@ -224,7 +240,7 @@ export function NewProject({
               hidden
               aria-label="Knowledge images"
               onChange={(event) => {
-                addFiles(event.target.files, "image");
+                void addFiles(event.target.files, "image");
                 event.target.value = "";
               }}
             />

@@ -104,6 +104,58 @@ def test_deepseek_maps_catalog_name_and_parses_tool_calls():
     assert done.usage.prompt_tokens == 11
 
 
+def test_deepseek_uses_the_task_model_name():
+    seen = {}
+
+    def transport(url, packed):
+        seen["body"] = {k: v for k, v in packed.items() if not k.startswith("_")}
+        return [
+            {"choices": [{"delta": {"content": "ok"}}], "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        ]
+
+    cfg = ModelConfig(provider="deepseek", deepseek_api_key="sk-test", deepseek_model="deepseek-flash")
+    port = DeepseekAdapter().create(cfg)
+    port._transport = transport
+    events = _run(
+        port,
+        system="s",
+        window=[("u", "hi")],
+        model=_ref("deepseek-v4-pro"),
+        max_tokens=512,
+    )
+    assert seen["body"]["model"] == "deepseek-v4-pro"
+    assert events[-1].usage.model == "deepseek-v4-pro"
+
+
+def test_router_keeps_cloud_providers_dormant(monkeypatch):
+    monkeypatch.delenv("MODEL_CLOUD_ENABLED", raising=False)
+    from services.worker.adapters import RoutingModel
+
+    router = RoutingModel(ModelConfig(provider="deepseek", deepseek_api_key="sk-test", nebius_api_key="nb"))
+    try:
+        router._port("nebius-token-factory")
+    except RuntimeError as exc:
+        assert "MODEL_CLOUD_ENABLED" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_router_builds_the_selected_provider(monkeypatch):
+    monkeypatch.setenv("MODEL_CLOUD_ENABLED", "1")
+    from services.worker.adapters import RoutingModel
+
+    router = RoutingModel(
+        ModelConfig(
+            provider="deepseek",
+            deepseek_api_key="sk-test",
+            nebius_api_key="nb",
+            nebius_base_url="https://nebius.test/v1",
+        )
+    )
+    assert router._port("deepseek").provider == "deepseek"
+    assert router._port("nebius-token-factory").provider == "nebius-token-factory"
+
+
 def test_reasoning_content_is_not_the_answer():
     text, calls, _, _ = _read_payloads([
         {"choices": [{"delta": {"reasoning_content": '{"tool":"web_search"}', "content": "平均收盘价 367.52"}}]},

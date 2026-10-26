@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"strings"
 	"testing"
 
 	graphv1 "github.com/Darth-S1d1ous/Termitaria/gen/go/termitaria/graph/v1"
@@ -87,5 +88,43 @@ func TestAttachUploadsShowsTheFile(t *testing.T) {
 	attachUploads(&view, "p_north", []seedJSON{{ID: "u_file", Kind: "file", Title: "notes.md", Body: "Copper closed at 9840."}})
 	if len(view.Nodes) != 2 {
 		t.Fatalf("duplicated nodes = %+v", view.Nodes)
+	}
+}
+
+func TestMergeDocumentsKeepsLongestAndMovesEdges(t *testing.T) {
+	view := projectGraphJSON{
+		ProjectID: "p_north",
+		Nodes: []graphNodeJSON{
+			{ID: "doc", Kind: "DOCUMENT", Title: "notes.md", Text: "full text"},
+			{ID: "doc_old", Kind: "DOCUMENT", Title: "Notes.MD", Text: "old"},
+			{ID: "concept", Kind: "CONCEPT", Title: "notes.md", Text: "summary"},
+			{ID: "other", Kind: "CONCEPT", Title: "GPQA", Text: "benchmark"},
+		},
+		Edges: []graphEdgeJSON{
+			{ID: "e1", Source: "concept", Target: "other", Relation: "MENTIONS"},
+			{ID: "e2", Source: "doc_old", Target: "other", Relation: "MENTIONS"},
+			{ID: "e3", Source: "doc_old", Target: "doc", Relation: "DUPLICATE"},
+		},
+	}
+	mergeDocuments(&view)
+	if len(view.Nodes) != 2 || view.Nodes[0].ID != "doc" || view.Nodes[1].ID != "other" {
+		t.Fatalf("nodes = %+v", view.Nodes)
+	}
+	if view.Nodes[0].Text != "full text" {
+		t.Fatalf("winner = %+v", view.Nodes[0])
+	}
+	if len(view.Edges) != 1 || view.Edges[0].Source != "doc" || view.Edges[0].Target != "other" {
+		t.Fatalf("edges = %+v", view.Edges)
+	}
+}
+
+func TestNormalizeSeedsKeepsFileText(t *testing.T) {
+	body := strings.Repeat("x", 25000)
+	seeds, err := normalizeSeeds([]seedJSON{{Kind: "file", Title: "notes.md", Body: body}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len([]rune(seeds[0].Body)); got != 20000 {
+		t.Fatalf("body length = %d, want 20000", got)
 	}
 }

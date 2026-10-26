@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -182,6 +183,12 @@ func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	if kind == "deck" {
 		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+	} else if kind == "file" {
+		contentType := mime.TypeByExtension(filepath.Ext(name))
+		if contentType == "" {
+			contentType = "text/plain; charset=utf-8"
+		}
+		w.Header().Set("Content-Type", contentType)
 	} else {
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	}
@@ -225,8 +232,10 @@ func artifactName(name, kind string) (string, error) {
 		if !strings.HasSuffix(name, ".pptx") {
 			return "", errors.New("deck name must end with .pptx")
 		}
+	case "file":
+		// Files written by an agent keep their own extension.
 	default:
-		return "", errors.New("kind must be report or deck")
+		return "", errors.New("kind must be report, deck, or file")
 	}
 	return name, nil
 }
@@ -277,11 +286,11 @@ func normalizeSeeds(in []seedJSON) ([]seedJSON, error) {
 		if title == "" {
 			title = body
 		}
-		if len(title) > 120 {
-			title = title[:120]
+		if runes := []rune(title); len(runes) > 120 {
+			title = string(runes[:120])
 		}
-		if len(body) > 4000 {
-			body = body[:4000]
+		if runes := []rune(body); len(runes) > 20000 {
+			body = string(runes[:20000])
 		}
 		out = append(out, seedJSON{ID: "k_" + randHex(4), Kind: seed.Kind, Title: title, Body: body})
 	}

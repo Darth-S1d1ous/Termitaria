@@ -231,6 +231,7 @@ type clientFrame struct {
 	MentionAgentID string `json:"mention_agent_id"`
 	ClientMsgID    string `json:"client_msg_id"`
 	Text           string `json:"text"`
+	ModelID        string `json:"model_id"`
 }
 
 func (s *Server) onClient(ctx context.Context, projectID string, data []byte, events chan []byte) {
@@ -254,6 +255,14 @@ func (s *Server) onClient(ctx context.Context, projectID string, data []byte, ev
 		})
 		return
 	}
+	model, err := resolveModel(frame.ModelID)
+	if err != nil {
+		push(events, map[string]string{
+			"type": "error", "chat_id": frame.ChatID, "client_msg_id": frame.ClientMsgID,
+			"code": "BAD_REQUEST", "message": err.Error(),
+		})
+		return
+	}
 	sessionID, err := s.ensureSession(ctx, projectID, key, agentID)
 	if err != nil {
 		push(events, map[string]string{
@@ -262,10 +271,10 @@ func (s *Server) onClient(ctx context.Context, projectID string, data []byte, ev
 		})
 		return
 	}
-	_, err = s.manager.AppendMessage(ctx, sessionID,
+	_, err = s.manager.AppendMessageWithModel(ctx, sessionID,
 		&sessionv1.Participant{Kind: &sessionv1.Participant_UserId{UserId: userID}},
 		[]*sessionv1.ContentBlock{{Block: &sessionv1.ContentBlock_Text{Text: text}}},
-		"", frame.ClientMsgID, "")
+		"", frame.ClientMsgID, "", model)
 	if err != nil {
 		code := "UNAVAILABLE"
 		if errors.Is(err, session.ErrNotYourTurn) {

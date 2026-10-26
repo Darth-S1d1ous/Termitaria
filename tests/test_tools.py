@@ -138,6 +138,37 @@ def test_write_file_stays_in_workdir(tmp_path, monkeypatch):
     assert "write_file" not in "".join(streamed)
 
 
+def test_read_file_stays_in_workdir(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORK_DIR", str(tmp_path))
+    (tmp_path / "protocol.md").write_text("design of record", encoding="utf-8")
+    from services.worker.tools import _read_file
+
+    (tmp_path / ".env").write_text("SECRET=1", encoding="utf-8")
+    (tmp_path / "var" / "memory").mkdir(parents=True)
+    (tmp_path / "var" / "memory" / "episodes.jsonl").write_text("another agent's notes", encoding="utf-8")
+    assert asyncio.run(_read_file({"path": "protocol.md"})) == "design of record"
+    assert asyncio.run(_read_file({"path": "../outside.md"})).startswith("Refused to read")
+    assert asyncio.run(_read_file({"path": "missing.md"})).startswith("No file at")
+    assert asyncio.run(_read_file({"path": ".env"})).startswith("Refused to read hidden")
+    assert asyncio.run(_read_file({"path": "var/memory/episodes.jsonl"})).startswith("Refused to read")
+
+
+def test_write_file_is_stored_as_artifact(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORK_DIR", str(tmp_path))
+    calls = []
+    monkeypatch.setattr(
+        "services.worker.tools._store_artifact",
+        lambda gateway, project_id, name, kind, raw: calls.append((gateway, project_id, name, kind, raw))
+        or "Stored file protocol.md at /x",
+    )
+    from services.worker.tools import _write_file
+
+    out = asyncio.run(_write_file("http://gateway", "p")({"path": "protocol.md", "content": "hello"}))
+    assert (tmp_path / "protocol.md").read_text(encoding="utf-8") == "hello"
+    assert calls == [("http://gateway", "p", "protocol.md", "file", b"hello")]
+    assert "Stored file" in out
+
+
 def test_closing_round_runs_text_calls_then_asks_for_prose(tmp_path, monkeypatch):
     monkeypatch.setenv("WORK_DIR", str(tmp_path))
     monkeypatch.setenv("GATEWAY_URL", "http://127.0.0.1:9")
@@ -284,7 +315,7 @@ def test_workers_get_default_tools_without_spec():
         mcp_tools=[],
         gateway="http://127.0.0.1:9",
     )
-    for name in ("web_search", "fetch_url", "utc_time", "write_file"):
+    for name in ("web_search", "fetch_url", "utc_time", "write_file", "read_file"):
         assert name in worker.names()
     assert "delegate" not in worker.names()
     assert "advance" not in worker.names()
@@ -299,6 +330,7 @@ def test_workers_get_default_tools_without_spec():
         gateway="http://127.0.0.1:9",
     )
     assert "web_search" not in lead.names()
+    assert "read_file" in lead.names()
     assert "delegate" in lead.names()
     assert "write_report" in lead.names()
 

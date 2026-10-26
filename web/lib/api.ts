@@ -36,6 +36,19 @@ export function loadSwarmSpecs() {
   return api<{ specs: SwarmSpecDoc[] }>("/api/swarmspecs");
 }
 
+export type ModelOption = {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+  tier?: string;
+  enabled: boolean;
+};
+
+export function loadModels() {
+  return api<{ models: ModelOption[]; default_id: string }>("/api/models");
+}
+
 export function createProject(name: string, spec: string, seeds: { kind: string; title: string; body: string }[] = []) {
   return api<Project>("/api/projects", {
     method: "POST",
