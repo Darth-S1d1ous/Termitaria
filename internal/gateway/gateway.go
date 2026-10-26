@@ -220,6 +220,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/artifacts", s.createArtifact)
 	mux.HandleFunc("GET /api/projects/{id}/artifacts/{name}", s.getArtifact)
 	mux.HandleFunc("GET /api/projects/{id}/knowledge", s.projectGraph)
+	mux.HandleFunc("POST /api/projects/{id}/knowledge", s.uploadKnowledge)
 	mux.HandleFunc("GET /api/memory-graph", s.memoryGraph)
 	mux.HandleFunc("GET /api/ws", s.serveWS)
 	return cors(mux)

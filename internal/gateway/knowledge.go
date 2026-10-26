@@ -2,9 +2,12 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -82,7 +85,121 @@ func (s *Server) projectGraph(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "knowledge graph is not reachable")
 		return
 	}
-	writeJSON(w, http.StatusOK, graphView(id, resp))
+	view := graphView(id, resp)
+	attachUploads(&view, id, s.projectSeeds(id))
+	writeJSON(w, http.StatusOK, view)
+}
+
+// uploadKnowledge 把用户刚传的文件写进这个 project，并送进知识图。任务进行中也能读到。
+func (s *Server) uploadKnowledge(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 200_001))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file is too large")
+		return
+	}
+	if len(raw) > 200_000 {
+		writeError(w, http.StatusBadRequest, "file is too large")
+		return
+	}
+	var body struct {
+		Title string `json:"title"`
+		Text  string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	text := strings.TrimSpace(body.Text)
+	if text == "" || strings.Contains(body.Text, "\x00") {
+		writeError(w, http.StatusBadRequest, "file is empty")
+		return
+	}
+	truncated := false
+	runes := []rune(text)
+	if len(runes) > 20000 {
+		text = string(runes[:20000])
+		truncated = true
+	}
+	title := strings.TrimSpace(filepath.Base(strings.TrimSpace(body.Title)))
+	if title == "" || title == "." || title == ".." {
+		title = "upload.txt"
+	}
+	if len([]rune(title)) > 120 {
+		title = string([]rune(title)[:120])
+	}
+	seed := seedJSON{ID: "u_" + randHex(4), Kind: "file", Title: title, Body: text}
+	s.mu.Lock()
+	found := false
+	for _, p := range s.projects {
+		if p.ID != id {
+			continue
+		}
+		found = true
+		if len(p.Seeds) >= 60 {
+			s.mu.Unlock()
+			writeError(w, http.StatusBadRequest, "this project has too many files")
+			return
+		}
+		p.Seeds = append(p.Seeds, seed)
+		if err := s.save(); err != nil {
+			s.mu.Unlock()
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		break
+	}
+	s.mu.Unlock()
+	if !found {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	s.publishDocument(r.Context(), id, seed.ID, seed.Title, seed.Body, "text/plain")
+	s.broadcast(id, map[string]any{"type": "knowledge"})
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":        seed.ID,
+		"node_id":   id + "/" + seed.ID,
+		"title":     seed.Title,
+		"truncated": truncated,
+	})
+}
+
+func (s *Server) projectSeeds(id string) []seedJSON {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.projects {
+		if p.ID == id {
+			return append([]seedJSON(nil), p.Seeds...)
+		}
+	}
+	return nil
+}
+
+// 上传的文件先作为 document 出现。Graphiti 抽出的实体和关系随后从查询里一起回来。
+func attachUploads(view *projectGraphJSON, projectID string, seeds []seedJSON) {
+	if view == nil {
+		return
+	}
+	have := map[string]bool{}
+	for _, node := range view.Nodes {
+		have[node.ID] = true
+	}
+	for _, seed := range seeds {
+		if !strings.HasPrefix(seed.ID, "u_") || strings.TrimSpace(seed.Body) == "" {
+			continue
+		}
+		id := projectID + "/" + seed.ID
+		if have[id] {
+			continue
+		}
+		have[id] = true
+		view.Nodes = append(view.Nodes, graphNodeJSON{
+			ID:    id,
+			Kind:  "DOCUMENT",
+			Title: seed.Title,
+			Text:  seed.Body,
+		})
+	}
 }
 
 func graphView(projectID string, resp *graphv1.QuerySubgraphResponse) projectGraphJSON {

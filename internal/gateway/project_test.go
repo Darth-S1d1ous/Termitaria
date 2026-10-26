@@ -369,6 +369,47 @@ func postArtifact(t *testing.T, base, projectID, name, kind string, raw []byte) 
 	res.Body.Close()
 }
 
+func TestUploadKnowledgeWhileTheProjectExists(t *testing.T) {
+	srv, _ := testServer(t)
+	httpSrv := httptest.NewServer(srv.Handler())
+	t.Cleanup(httpSrv.Close)
+	created := createField(t, httpSrv.URL)
+	res := postJSON(t, httpSrv.URL+"/api/projects/"+created.ID+"/knowledge", map[string]string{
+		"title": "notes.md",
+		"text":  "Copper closed at 9840.",
+	})
+	if res.StatusCode != 201 {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("upload status = %d %s", res.StatusCode, body)
+	}
+	var saved struct {
+		ID     string `json:"id"`
+		NodeID string `json:"node_id"`
+		Title  string `json:"title"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&saved); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if !strings.HasPrefix(saved.ID, "u_") || saved.Title != "notes.md" || saved.NodeID != created.ID+"/"+saved.ID {
+		t.Fatalf("saved = %+v", saved)
+	}
+	project := projectByID(t, httpSrv.URL, created.ID)
+	if len(project.Seeds) != 1 || project.Seeds[0].Body != "Copper closed at 9840." || project.Seeds[0].ID != saved.ID {
+		t.Fatalf("seeds = %+v", project.Seeds)
+	}
+	empty := postJSON(t, httpSrv.URL+"/api/projects/"+created.ID+"/knowledge", map[string]string{"title": "empty.md", "text": "  "})
+	if empty.StatusCode != 400 {
+		t.Fatalf("empty status = %d", empty.StatusCode)
+	}
+	empty.Body.Close()
+	missing := postJSON(t, httpSrv.URL+"/api/projects/missing/knowledge", map[string]string{"title": "a.md", "text": "hello"})
+	if missing.StatusCode != 404 {
+		t.Fatalf("missing status = %d", missing.StatusCode)
+	}
+	missing.Body.Close()
+}
+
 func TestReplyTimeoutLeavesTheStepActive(t *testing.T) {
 	srv, _ := testServer(t)
 	httpSrv := httptest.NewServer(srv.Handler())

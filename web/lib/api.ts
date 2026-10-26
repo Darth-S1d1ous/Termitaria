@@ -92,6 +92,13 @@ export function loadProjectGraph(projectId: string) {
   return api<ProjectGraph>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`);
 }
 
+export function uploadProjectKnowledge(projectId: string, title: string, text: string) {
+  return api<{ id: string; node_id: string; title: string; truncated?: boolean }>(
+    `/api/projects/${encodeURIComponent(projectId)}/knowledge`,
+    { method: "POST", body: { title, text } },
+  );
+}
+
 export function sendMessage(projectId: string, chatId: string, text: string) {
   return api<{ user: ChatMessage; agent: ChatMessage }>(
     `/api/projects/${projectId}/chats/${chatId}/messages`,

@@ -93,8 +93,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 }
 
 .mark img {
-  width: 18.7px;
-  height: 25.5px;
+  width: 16.5px;
+  height: 22.5px;
   object-fit: contain;
   image-rendering: pixelated;
 }
@@ -891,13 +891,87 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   overflow: hidden;
 }
 
-.kg-body > svg,
+.kg-body > .kg-stage,
 .kg-body > .kg-detail {
   min-width: 0;
   min-height: 0;
 }
 
-.kg-body svg { width: 100%; height: 100%; display: block; }
+.kg-stage {
+  position: relative;
+  overflow: hidden;
+  background: radial-gradient(circle at 1px 1px, #eef2f5 1px, transparent 0) 0 0 / 22px 22px;
+  cursor: grab;
+}
+
+.kg-stage:active { cursor: grabbing; }
+
+.kg-stage > svg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+.kg-search {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 5;
+  width: 180px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: #fff;
+  padding: 0 12px;
+  box-shadow: 0 4px 14px rgba(16, 35, 47, 0.1);
+}
+
+.kg-float {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 6px 18px rgba(16, 35, 47, 0.14);
+}
+
+.kg-float button {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #222;
+  display: grid;
+  place-items: center;
+}
+
+.kg-float button svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
+.kg-float button:hover { background: var(--hover); }
+
+.kg-float button:disabled { opacity: 0.45; cursor: default; }
+
+.kg-note { color: var(--accent-deep); font-size: 13px; margin: 6px 0 0; }
+
+.text-btn:disabled { opacity: 0.5; cursor: default; }
 
 .kg-edge { stroke: #c5d0d8; stroke-width: 2; }
 .kg-edge.named { stroke: #3390ec; }
@@ -939,12 +1013,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .kg-agent select { font: inherit; }
 
 .kg-node { cursor: pointer; }
-.kg-body svg.picked .kg-node { opacity: 0.35; }
+.kg-body svg.picked .kg-node { opacity: 0.28; }
 .kg-body svg.picked .kg-node.near,
-.kg-body svg.picked .kg-node.on { opacity: 1; }
+.kg-body svg.picked .kg-node.on,
+.kg-body svg .kg-node.hit { opacity: 1; }
+.kg-body svg.picked .kg-node.dim,
+.kg-body svg .kg-node.dim { opacity: 0.18; }
 .kg-node.on circle { stroke: var(--ink); stroke-width: 3; }
 
-.kg-label { fill: var(--ink); font-size: 12px; }
+.kg-label { fill: #fff; font-size: 11px; font-weight: 600; }
+
+.kg-label-bg { fill: #3a4149; }
+
+.kg-node.dim { opacity: 0.18; }
 
 .kg-detail {
   min-height: 0;

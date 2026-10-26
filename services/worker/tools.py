@@ -199,6 +199,56 @@ def materials_text(seeds: list | None) -> str:
     return "Project materials (cite these as the project seed):\n" + "\n".join(lines)
 
 
+def fresh_uploads(seeds: list | None, seen: set[str]) -> list[dict]:
+    """本轮开始时还没进提示词的文件。seen 里的 id 不再重复送。"""
+    found = []
+    for seed in seeds or []:
+        if not isinstance(seed, dict):
+            continue
+        sid = str(seed.get("id") or "").strip()
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        title = str(seed.get("title") or "").strip()
+        body = str(seed.get("body") or "").strip()
+        if not title and not body:
+            continue
+        found.append({"id": sid, "title": title or sid, "body": body})
+    return found
+
+
+def upload_notice(seeds: list[dict]) -> str:
+    blocks = []
+    for seed in seeds:
+        title = str(seed.get("title") or "file").strip() or "file"
+        body = str(seed.get("body") or "").strip()
+        blocks.append(f"File: {title}\n{body}")
+    return (
+        "The user uploaded a file into this project's knowledge graph while you were working. "
+        "Read the file below. Call kg with action query to read the new entities and relations. "
+        "If that query does not list this file yet, call kg query again before you answer.\n\n"
+        + "\n\n".join(blocks)
+    )
+
+
+def uploaded_files(project: dict | None) -> str:
+    lines = []
+    for seed in (project or {}).get("seeds") or []:
+        if not isinstance(seed, dict):
+            continue
+        sid = str(seed.get("id") or "")
+        if not sid.startswith("u_"):
+            continue
+        title = str(seed.get("title") or sid).strip() or sid
+        body = str(seed.get("body") or "").strip()
+        if len(body) > 4000:
+            body = body[:4000] + "…"
+        lines.append(f"- {title}\n  {body}".rstrip())
+    if not lines:
+        return ""
+    return "Files the user uploaded into this knowledge graph:\n" + "\n".join(lines)
+
+
 def make_toolbox(
     *,
     agent: dict,
@@ -356,8 +406,9 @@ def make_toolbox(
                 "kg",
                 "Read or write this project's knowledge graph. action is query or write. "
                 "A write queues title and text for extraction. The entities and relations show up on a later query. "
-                "Query lists those entities and each relation's name and fact.",
-                _kg(project_id),
+                "Query lists those entities and each relation's name and fact, plus files the user uploaded. "
+                "If the user uploads a file while you are working, query again to read that file and its relations.",
+                _kg(project_id, gateway),
                 {
                     "action": {"type": "string", "description": "query or write"},
                     "title": {"type": "string"},
@@ -459,19 +510,24 @@ def _mcp(remote: MCPTool) -> Runner:
     return run
 
 
-def _kg(project_id: str) -> Runner:
+def _kg(project_id: str, gateway: str = "") -> Runner:
     async def run(args: dict) -> str:
         action = str(args.get("action") or "query").strip().lower()
         log.info("tool kg action=%s", action)
         from services.graph.client import GraphClient
 
-        # 写入只入队。查询只读已经落库的实体。
+        # 写入只入队。查询只读已经落库的实体，并带上用户刚传的文件。
         timeout = 10 if action == "write" else 4
         client = GraphClient(os.environ.get("GRAPH_GRPC_ADDR", "localhost:50051"), timeout_s=timeout)
         try:
             if action == "write":
                 return await _kg_write(client, project_id, args)
-            return await _kg_read(client, project_id)
+            graph = await _kg_read(client, project_id)
+            project = await asyncio.to_thread(load_project, gateway, project_id)
+            files = uploaded_files(project)
+            if files:
+                return f"{files}\n\n{graph}"
+            return graph
         except Exception as exc:
             return f"The knowledge graph is not reachable: {exc}"
         finally:

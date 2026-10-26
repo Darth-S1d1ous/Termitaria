@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -33,11 +34,13 @@ from . import envelope
 from .tools import (
     Toolbox,
     collect_urls,
+    fresh_uploads,
     load_project,
     make_toolbox,
     materials_text,
     mention_delegates,
     parse_tool_calls,
+    upload_notice,
     visible_text,
 )
 
@@ -151,6 +154,7 @@ def build_graph(model: ModelPort, emit: EmitDelta, nc=None):
         held["steps"] = steps
         held["files"] = []
         held["asked"] = False
+        held.update(_upload_watch(gateway, task.swarm_id, seeds))
         role_lines = [it.text for it in task.context.recalled if it.kind in _ROLE_KINDS]
         role = "\n".join(role_lines) or _FALLBACK_ROLES.get(task.agent_id) or (
             f"You are agent '{task.agent_id}' in a Termitaria swarm. "
@@ -178,9 +182,16 @@ def build_graph(model: ModelPort, emit: EmitDelta, nc=None):
         declared = _declared_tools(schemas)
         orch = held.get("kind") == "ORCHESTRATOR"
         limit = _MAX_ORCH_ROUNDS if orch else _MAX_TOOL_ROUNDS
-        for round_index in range(limit):
+        span = limit
+        finished = False
+        for round_index in range(limit + 6):
+            if round_index >= span:
+                break
             if _deadline_exceeded(task.budget):
                 return _cancelled(state.get("seq", 0), usage)
+            note = await _note_uploads(held)
+            if note:
+                window.append(("tool", note))
             # 工人的最后一轮不再提供函数。负责人的函数要留到这一轮真正结束。
             offer = schemas
             if not orch and used_tools and round_index == limit - 1:
@@ -203,10 +214,20 @@ def build_graph(model: ModelPort, emit: EmitDelta, nc=None):
             if not calls and orch:
                 if _orch_can_stop(held):
                     log.info("orch stop round=%s asked=%s", round_index + 1, bool(held.get("asked")))
+                    if await _keep_going(held, window, text):
+                        if round_index + 1 >= span:
+                            span += 1
+                        continue
                     text = _with_files(text, held)
+                    finished = True
                     break
                 if round_index == limit - 1:
+                    if await _keep_going(held, window, text):
+                        if round_index + 1 >= span:
+                            span += 1
+                        continue
                     text = _forced_ask(held, window)
+                    finished = True
                     break
                 window.append(("", text))
                 window.append(("tool", _OPEN_NUDGE))
@@ -222,7 +243,12 @@ def build_graph(model: ModelPort, emit: EmitDelta, nc=None):
                 window.append(("tool", _DATA_NUDGE))
                 continue
             if not calls:
+                if await _keep_going(held, window, text):
+                    if round_index + 1 >= span:
+                        span += 1
+                    continue
                 text = text or "The reply was cut off before it had any text."
+                finished = True
                 break
             used_tools = True
             notes: list[str] = []
@@ -250,7 +276,12 @@ def build_graph(model: ModelPort, emit: EmitDelta, nc=None):
             window.append(("", text))
             window.append(("tool", "\n\n".join(notes)))
             if asked:
+                if await _keep_going(held, window, None):
+                    if round_index + 1 >= span:
+                        span += 1
+                    continue
                 text = asked
+                finished = True
                 break
             if offer is None:
                 # 收尾轮不再提供函数，但模型仍可能把调用写在正文里。执行完再要一句给人看的话。
@@ -278,8 +309,13 @@ def build_graph(model: ModelPort, emit: EmitDelta, nc=None):
                         "usage": usage,
                     }
                 text = (follow or "").strip() or "\n\n".join(notes)
+                if await _keep_going(held, window, text):
+                    if round_index + 1 >= span:
+                        span += 1
+                    continue
+                finished = True
                 break
-        else:
+        if not finished:
             if orch and not _orch_can_stop(held):
                 text = _forced_ask(held, window)
             elif orch:
@@ -458,7 +494,8 @@ async def run_coworker(model, nc, task, project, gateway, sources, coworker_name
     user_text = (task_text or "").strip()
     if (context or "").strip():
         user_text += "\n\nContext:\n" + context.strip()
-    text, notes = await _coworker_loop(model, task, system, toolbox, sources, cid, user_text)
+    bag = _upload_watch(gateway, task.swarm_id, (project or {}).get("seeds"))
+    text, notes = await _coworker_loop(model, task, system, toolbox, sources, cid, user_text, bag)
     handoff = coworker_handoff(text, notes)
     await publish_episode(
         nc,
@@ -471,7 +508,7 @@ async def run_coworker(model, nc, task, project, gateway, sources, coworker_name
     return handoff
 
 
-async def _coworker_loop(model, task, system, toolbox: Toolbox, sources: set, cid: str, user_text: str):
+async def _coworker_loop(model, task, system, toolbox: Toolbox, sources: set, cid: str, user_text: str, bag: dict):
     window = [("", user_text)]
     notes: list[str] = []
     text = ""
@@ -480,10 +517,16 @@ async def _coworker_loop(model, task, system, toolbox: Toolbox, sources: set, ci
     used_tools = False
     used_data = False
     limit = _MAX_TOOL_ROUNDS
-    for round_index in range(limit):
+    span = limit
+    for round_index in range(limit + 6):
+        if round_index >= span:
+            break
         if _deadline_exceeded(task.budget):
             log.info("coworker %s deadline rounds=%s", cid, round_index)
             return "Stopped because the deadline was reached.", notes
+        note = await _note_uploads(bag)
+        if note:
+            window.append(("tool", note))
         offer = schemas
         if used_tools and round_index == limit - 1:
             offer = None
@@ -505,6 +548,10 @@ async def _coworker_loop(model, task, system, toolbox: Toolbox, sources: set, ci
             window.append(("tool", _DATA_NUDGE))
             continue
         if not calls:
+            if await _keep_going(bag, window, text):
+                if round_index + 1 >= span:
+                    span += 1
+                continue
             log.info("coworker %s done rounds=%s", cid, round_index + 1)
             return text or "Stopped after the tool results.", notes
         used_tools = True
@@ -598,13 +645,13 @@ async def _recall(nc, agent_id: str, query: str, trace_id: str):
         return []
 
 
-async def _project_knowledge(project_id: str) -> str:
+async def _project_knowledge(project_id: str, timeout_s: float = 8) -> str:
     if not project_id:
         return ""
     from services.graph.client import GraphClient
     from .tools import _kg_read
 
-    client = GraphClient(os.environ.get("GRAPH_GRPC_ADDR", "localhost:50051"), timeout_s=8)
+    client = GraphClient(os.environ.get("GRAPH_GRPC_ADDR", "localhost:50051"), timeout_s=timeout_s)
     try:
         return await _kg_read(client, project_id)
     except Exception as exc:
@@ -612,6 +659,107 @@ async def _project_knowledge(project_id: str) -> str:
         return ""
     finally:
         await client.close()
+
+
+def _upload_watch(gateway: str, project_id: str, seeds: list | None) -> dict:
+    seen: set[str] = set()
+    for seed in seeds or []:
+        if isinstance(seed, dict) and seed.get("id"):
+            seen.add(str(seed["id"]))
+    return {
+        "gateway": gateway,
+        "project_id": project_id,
+        "seen_seeds": seen,
+        "kg_left": 0,
+        "kg_text": "",
+        "upload_extra": 0,
+    }
+
+
+def _graph_note(text: str) -> str:
+    return (
+        "The knowledge graph changed after the upload. "
+        "These are the current entities and relations:\n"
+        + text
+    )
+
+
+async def _note_uploads(bag: dict, wait: bool = False) -> str:
+    """任务进行中读到的新文件。wait 时多等一会儿，让抽取出来的关系也能进窗口。"""
+    gateway = bag.get("gateway") or ""
+    project_id = bag.get("project_id") or ""
+    if not gateway or not project_id:
+        return ""
+    try:
+        project = await asyncio.to_thread(load_project, gateway, project_id)
+        fresh = fresh_uploads((project or {}).get("seeds") if project else None, bag.setdefault("seen_seeds", set()))
+        parts: list[str] = []
+        if fresh:
+            log.info("upload seen project=%s files=%s", project_id, len(fresh))
+            parts.append(upload_notice(fresh))
+            base = (await _project_knowledge(project_id, timeout_s=3) or "").strip()
+            bag["kg_text"] = base
+            bag["kg_left"] = 4
+            bag["polled"] = False
+            bag["told_pending"] = False
+            if base and "no nodes yet" not in base:
+                parts.append(_graph_note(base))
+            if not wait:
+                return "\n\n".join(parts)
+        if int(bag.get("kg_left") or 0) <= 0:
+            return "\n\n".join(parts)
+        if wait:
+            if bag.get("polled"):
+                text = (await _project_knowledge(project_id, timeout_s=3) or "").strip()
+                if not text or text == bag.get("kg_text") or "no nodes yet" in text:
+                    text = ""
+            else:
+                bag["polled"] = True
+                text = await _poll_graph(project_id, str(bag.get("kg_text") or ""))
+            if text:
+                bag["kg_text"] = text
+                bag["kg_left"] = 0
+                parts.append(_graph_note(text))
+            elif not parts and not bag.get("told_pending"):
+                bag["told_pending"] = True
+                parts.append(
+                    "The uploaded file is stored. The knowledge graph has no new relations yet. "
+                    "Call kg with action query before you rely on relations from that file."
+                )
+            return "\n\n".join(parts)
+        bag["kg_left"] = int(bag["kg_left"]) - 1
+        text = (await _project_knowledge(project_id, timeout_s=3) or "").strip()
+        if text and text != bag.get("kg_text") and "no nodes yet" not in text:
+            bag["kg_text"] = text
+            bag["kg_left"] = 0
+            parts.append(_graph_note(text))
+        return "\n\n".join(parts)
+    except Exception:
+        log.info("upload check failed project=%s", project_id, exc_info=True)
+        return ""
+
+
+async def _poll_graph(project_id: str, previous: str) -> str:
+    for attempt in range(8):
+        text = (await _project_knowledge(project_id, timeout_s=3) or "").strip()
+        if text and text != previous and "no nodes yet" not in text:
+            return text
+        if attempt < 7:
+            await asyncio.sleep(3)
+    return ""
+
+
+async def _keep_going(bag: dict, window: list[tuple[str, str]], spoken: str | None) -> bool:
+    if int(bag.get("upload_extra") or 0) >= 4:
+        return False
+    note = await _note_uploads(bag, wait=True)
+    if not note:
+        return False
+    if spoken:
+        window.append(("", spoken))
+    window.append(("tool", note))
+    bag["upload_extra"] = int(bag.get("upload_extra") or 0) + 1
+    return True
 
 
 async def publish_episode(nc, agent_id: str, session_id: str, summary: str, trace_id: str) -> None:

@@ -64,3 +64,28 @@ func TestGraphViewReadsProjectNodes(t *testing.T) {
 		t.Fatalf("nil response = %+v", empty)
 	}
 }
+
+func TestAttachUploadsShowsTheFile(t *testing.T) {
+	view := graphView("p_north", &graphv1.QuerySubgraphResponse{
+		Nodes: []*graphv1.Node{{
+			NodeId: "n1",
+			Kind:   graphv1.NodeKind_NODE_KIND_CONCEPT,
+			Title:  "Northwire",
+		}},
+	})
+	attachUploads(&view, "p_north", []seedJSON{
+		{ID: "k_old", Kind: "text", Title: "Seed", Body: "already in the prompt"},
+		{ID: "u_file", Kind: "file", Title: "notes.md", Body: "Copper closed at 9840."},
+	})
+	if len(view.Nodes) != 2 {
+		t.Fatalf("nodes = %+v", view.Nodes)
+	}
+	doc := view.Nodes[1]
+	if doc.ID != "p_north/u_file" || doc.Kind != "DOCUMENT" || doc.Title != "notes.md" || doc.Text != "Copper closed at 9840." {
+		t.Fatalf("upload = %+v", doc)
+	}
+	attachUploads(&view, "p_north", []seedJSON{{ID: "u_file", Kind: "file", Title: "notes.md", Body: "Copper closed at 9840."}})
+	if len(view.Nodes) != 2 {
+		t.Fatalf("duplicated nodes = %+v", view.Nodes)
+	}
+}

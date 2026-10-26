@@ -374,6 +374,66 @@ def test_only_the_lead_delegates_and_it_runs_here():
     assert text == "ideator replied:\nH1 holds."
 
 
+def test_running_turn_reads_a_file_uploaded_midway(monkeypatch):
+    import asyncio
+
+    from services.worker import graph
+
+    seen = {"n": 0}
+
+    def load_project(gateway, project_id):
+        del gateway
+        seen["n"] += 1
+        seeds = []
+        if seen["n"] > 1:
+            seeds.append({"id": "u_new", "title": "notes.md", "body": "Copper closed at 9840."})
+        return {"id": project_id, "seeds": seeds}
+
+    async def knowledge(project_id, timeout_s=8):
+        del project_id, timeout_s
+        return "Knowledge graph:\n- concept: Copper — priced at 9840\n\nRelations:\n- PRICED_AT: Copper -> 9840"
+
+    monkeypatch.setattr(graph, "load_project", load_project)
+    monkeypatch.setattr(graph, "_project_knowledge", knowledge)
+    bag = graph._upload_watch("http://gw", "p1", [])
+
+    async def run():
+        before = await graph._note_uploads(bag)
+        during = await graph._note_uploads(bag)
+        return before, during
+
+    before, during = asyncio.run(run())
+    assert before == ""
+    assert "notes.md" in during
+    assert "Copper closed at 9840." in during
+    assert "PRICED_AT: Copper -> 9840" in during
+
+
+def test_fresh_uploads_are_the_files_added_during_a_task():
+    from services.worker.tools import fresh_uploads, upload_notice, uploaded_files
+
+    seen = {"k_old"}
+    first = fresh_uploads(
+        [
+            {"id": "k_old", "title": "Old", "body": "already in the prompt"},
+            {"kind": "text", "title": "Seed", "body": "no id"},
+            {"id": "u_new", "title": "notes.md", "body": "Copper closed at 9840."},
+        ],
+        seen,
+    )
+    assert [item["id"] for item in first] == ["u_new"]
+    assert "u_new" in seen
+    note = upload_notice(first)
+    assert "notes.md" in note
+    assert "Copper closed at 9840." in note
+    assert "action query" in note
+    assert fresh_uploads([{"id": "u_new", "title": "notes.md", "body": "Copper closed at 9840."}], seen) == []
+    listed = uploaded_files({"seeds": [{"id": "u_new", "title": "notes.md", "body": "Copper closed at 9840."}]})
+    assert "notes.md" in listed
+    assert "Copper closed at 9840." in listed
+    assert uploaded_files({"seeds": [{"id": "k_old", "title": "Old", "body": "seed"}]}) == ""
+
+
 def test_kg_tool_queues_a_note_and_reads_relations():
     from services.graph.graphiti_kg import node_text
     from services.worker.tools import _kg_read, _kg_write
