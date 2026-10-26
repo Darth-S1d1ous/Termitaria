@@ -92,6 +92,12 @@ class Mem0Backend:
                 limit=limit,
             )
         hits = _hits(raw)
+        if req.project_id:
+            hits = [
+                hit
+                for hit in hits
+                if str((hit.get("metadata") or {}).get("project_id") or "") == req.project_id
+            ]
         return assemble_response(req, mem0_items(req.agent_id, hits), started=started)
 
     async def write_episode(self, req: memory_pb2.WriteEpisodeRequest) -> str:
@@ -103,7 +109,11 @@ class Mem0Backend:
             text,
             agent_id=episode.agent_id,
             run_id=episode.session_id,
-            metadata={"occurred_at_ms": episode.occurred_at_ms, "run_id": episode.session_id},
+            metadata={
+                "occurred_at_ms": episode.occurred_at_ms,
+                "run_id": episode.session_id,
+                "project_id": episode.project_id,
+            },
         )
         async with self._lock:
             raw = await asyncio.to_thread(self._memory.add, messages, **kwargs)

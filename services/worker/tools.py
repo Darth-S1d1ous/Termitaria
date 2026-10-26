@@ -246,7 +246,10 @@ def uploaded_files(project: dict | None) -> str:
         lines.append(f"- {title}\n  {body}".rstrip())
     if not lines:
         return ""
-    return "Files the user uploaded into this knowledge graph:\n" + "\n".join(lines)
+    return (
+        "Files the user uploaded into this knowledge graph "
+        "(use kg action=read title=... for the full text):\n" + "\n".join(lines)
+    )
 
 
 def make_toolbox(
@@ -317,8 +320,9 @@ def make_toolbox(
     if "write_file" in names:
         tools.append(Tool(
             "write_file",
-            "Write content to path inside the working directory, for example notes.md. "
-            "The file is also stored in the project's Artifacts tab.",
+            "Write a draft into this project's workspace, for example notes.md. "
+            "The file is also stored in the project's Artifacts tab. "
+            "Uploaded project files are not here; read those with kg.",
             _write_file(gateway, project_id),
             {
                 "path": {"type": "string"},
@@ -329,8 +333,9 @@ def make_toolbox(
     if "read_file" in names:
         tools.append(Tool(
             "read_file",
-            "Read a text file inside the working directory, for example protocol_v5.md or a file another agent wrote.",
-            _read_file,
+            "Read a text draft from this project's workspace, for example a file you wrote with write_file. "
+            "Uploaded project files are not drafts; read those with kg action=read.",
+            _read_file(project_id, seeds),
             {"path": {"type": "string"}},
             ["path"],
         ))
@@ -414,14 +419,16 @@ def make_toolbox(
         tools.append(
             Tool(
                 "kg",
-                "Read or write this project's knowledge graph. action is query or write. "
+                "Read or write this project's knowledge graph. action is query, write, or read. "
                 "A write queues title and text for extraction. The entities and relations show up on a later query. "
-                "Query lists those entities and each relation's name and fact, plus files the user uploaded. "
-                "If the user uploads a file while you are working, query again to read that file and its relations.",
+                "Query lists extracted entities, relations, and uploaded files. "
+                "Read returns the full text of a user-uploaded/project-seed document by title. "
+                "Agent-written drafts are workspace files; read those with read_file. "
+                "If the user uploads a file while you are working, query again and read it with kg action=read.",
                 _kg(project_id, gateway),
                 {
-                    "action": {"type": "string", "description": "query or write"},
-                    "title": {"type": "string"},
+                    "action": {"type": "string", "description": "query, write, or read"},
+                    "title": {"type": "string", "description": "read: project material title; write: note title"},
                     "text": {"type": "string"},
                 },
                 ["action"],
@@ -524,6 +531,29 @@ def _kg(project_id: str, gateway: str = "") -> Runner:
     async def run(args: dict) -> str:
         action = str(args.get("action") or "query").strip().lower()
         log.info("tool kg action=%s", action)
+        if action == "read":
+            title = str(args.get("title") or "").strip()
+            if not title:
+                return "kg read requires title"
+            project = await asyncio.to_thread(load_project, gateway, project_id)
+            wanted = title.casefold()
+            for seed in (project or {}).get("seeds") or []:
+                if not isinstance(seed, dict):
+                    continue
+                seed_title = str(seed.get("title") or "").strip()
+                seed_id = str(seed.get("id") or "").strip()
+                if wanted not in {seed_title.casefold(), seed_id.casefold()}:
+                    continue
+                body = str(seed.get("body") or "").strip()
+                if not body:
+                    return f"Project material {seed_title or title!r} has no text."
+                return f"Project material: {seed_title or title}\n\n{body}"
+            return (
+                f"No project upload named {title!r}. "
+                "If this is an agent-written draft, read it from the workspace with read_file; "
+                "use kg action=query for graph summaries."
+            )
+
         from services.graph.client import GraphClient
 
         # 写入只入队。查询只读已经落库的实体，并带上用户刚传的文件。
@@ -654,15 +684,24 @@ async def _fetch_url(args: dict) -> str:
 _MAX_READ_CHARS = 40_000
 
 
-def _work_path(path: str) -> tuple[Path | None, str]:
-    root = Path(os.environ.get("WORK_DIR", os.getcwd())).resolve()
+def _workspace_root(project_id: str) -> Path:
+    """Drafts live under workspace/<project>, never in the repo root."""
+    base = Path(os.environ.get("WORK_DIR", os.getcwd())).resolve()
+    if not project_id:
+        return base
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", project_id).strip("._-") or "default"
+    return (base / "workspace" / safe).resolve()
+
+
+def _work_path(path: str, project_id: str = "") -> tuple[Path | None, str, Path]:
+    root = _workspace_root(project_id)
     target = Path(path)
     if not target.is_absolute():
         target = root / target
     target = target.resolve()
     if target != root and root not in target.parents:
-        return None, f"Only paths inside {root} are allowed."
-    return target, ""
+        return None, f"Only paths inside {root} are allowed.", root
+    return target, "", root
 
 
 def _write_file(gateway: str = "", project_id: str = "") -> Runner:
@@ -672,7 +711,7 @@ def _write_file(gateway: str = "", project_id: str = "") -> Runner:
         if not path or content is None:
             return "write_file requires path and content"
         text = str(content)
-        result = await asyncio.to_thread(_write_blocking, path, text)
+        result = await asyncio.to_thread(_write_blocking, path, text, project_id)
         if not result.startswith("Wrote ") or not gateway or not project_id:
             return result
         name = Path(path).name
@@ -686,8 +725,8 @@ def _write_file(gateway: str = "", project_id: str = "") -> Runner:
     return run
 
 
-def _write_blocking(path: str, content: str) -> str:
-    target, problem = _work_path(path)
+def _write_blocking(path: str, content: str, project_id: str = "") -> str:
+    target, problem, _root = _work_path(path, project_id)
     if problem:
         return f"Refused to write {path}. {problem}"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -695,18 +734,38 @@ def _write_blocking(path: str, content: str) -> str:
     return f"Wrote {target} ({len(content)} characters)."
 
 
-async def _read_file(args: dict) -> str:
-    path = str(args.get("path") or "").strip()
-    if not path:
-        return "read_file requires path"
-    return await asyncio.to_thread(_read_blocking, path)
+def _upload_hint(path: str, seeds: list | None) -> str:
+    name = Path(path).name.casefold()
+    for seed in seeds or []:
+        if not isinstance(seed, dict):
+            continue
+        title = str(seed.get("title") or "").strip()
+        if not title or Path(title).name.casefold() != name:
+            continue
+        return (
+            f"{title!r} is an uploaded project file, not a draft. "
+            f"Read it with kg action=read title={title!r} (or kg action=query)."
+        )
+    return ""
 
 
-def _read_blocking(path: str) -> str:
-    target, problem = _work_path(path)
+def _read_file(project_id: str = "", seeds: list | None = None) -> Runner:
+    async def run(args: dict) -> str:
+        path = str(args.get("path") or "").strip()
+        if not path:
+            return "read_file requires path"
+        return await asyncio.to_thread(_read_blocking, path, project_id, seeds)
+
+    return run
+
+
+def _read_blocking(path: str, project_id: str = "", seeds: list | None = None) -> str:
+    target, problem, root = _work_path(path, project_id)
     if problem:
+        hint = _upload_hint(path, seeds)
+        if hint:
+            return hint
         return f"Refused to read {path}. {problem}"
-    root = Path(os.environ.get("WORK_DIR", os.getcwd())).resolve()
     parts = target.relative_to(root).parts
     if any(part.startswith(".") for part in parts):
         return f"Refused to read hidden path {path}."
@@ -717,7 +776,10 @@ def _read_blocking(path: str) -> str:
     except IsADirectoryError:
         return f"{target} is a directory, not a text file."
     except FileNotFoundError:
-        return f"No file at {target}."
+        hint = _upload_hint(path, seeds)
+        if hint:
+            return hint
+        return f"No file at {target}. Drafts live in this project's workspace; uploaded files are read with kg action=read."
     except OSError as exc:
         return f"Could not read {target}: {exc}"
     if "\x00" in text:

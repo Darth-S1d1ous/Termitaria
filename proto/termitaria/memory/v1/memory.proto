@@ -32,6 +32,7 @@ message MemoryItem {
   reserved 6, 7;
   int64 occurred_at_ms = 8;
   string source_session_id = 9;
+  string project_id = 10;      // 这条记忆属于哪个 project；空 = 未归属
 }
 
 // Episode 是一次 session 结束后沉淀的情节记忆。
@@ -42,6 +43,7 @@ message Episode {
   repeated string salient_spans = 4;
   repeated string graph_node_ids = 5;  // 关联的 KG 节点
   int64 occurred_at_ms = 6;
+  string project_id = 7;
 }
 
 message RecallRequest {
@@ -50,6 +52,7 @@ message RecallRequest {
   RecallDepth depth = 3;
   uint32 top_k = 4;
   common.v1.Budget budget = 5;  // 召回延迟预算（架构 §6.1：50–200ms）
+  string project_id = 6;        // 只召回这个 project 的 episode；空 = 不按 project 过滤
 }
 
 // RecallMeta 让召回过程可观测。

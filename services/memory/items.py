@@ -70,6 +70,7 @@ def mem0_items(agent_id: str, hits: list[dict]) -> list[memory_pb2.MemoryItem]:
                 score=float(hit.get("score") or 0.0),
                 occurred_at_ms=_ms(meta.get("occurred_at_ms")),
                 source_session_id=run_id,
+                project_id=str(meta.get("project_id") or ""),
             )
         )
     return items

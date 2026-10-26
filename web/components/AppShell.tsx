@@ -443,7 +443,7 @@ export function AppShell() {
     const mentioned = chat.kind === "channel" && mention
       ? project?.agents.find((agent) => agent.id === mention)
       : undefined;
-    const sent = mentioned ? `@${mentioned.display_name}${text}` : text;
+    const sent = mentioned ? `@${mentioned.display_name} ${text}` : text;
     const clientMsgId = crypto.randomUUID().replace(/-/g, "");
     const pending: ChatMessage = {
       id: `m_${clientMsgId}`,

@@ -218,7 +218,7 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 	if selected := msg.GetModel(); selected.GetModel() != "" {
 		model = selected
 	}
-	recalled, err := d.recall(ctx, agentID, messageText(msg), traceID)
+	recalled, err := d.recall(ctx, ev.GetSwarmId(), agentID, messageText(msg), traceID)
 	if err != nil {
 		log.Printf("memory.recall agent=%s: %v（保持角色条目）", agentID, err)
 		recalled = nil
@@ -269,9 +269,10 @@ func (d *Dispatcher) trigger(ctx context.Context, ev *sessionv1.SessionEvent, ms
 }
 
 // recall 在 dispatch 前同步问 memory.recall。超时见 recallWait。失败则调用方保留静态角色。
-func (d *Dispatcher) recall(ctx context.Context, agentID, query, traceID string) ([]*memoryv1.MemoryItem, error) {
+func (d *Dispatcher) recall(ctx context.Context, projectID, agentID, query, traceID string) ([]*memoryv1.MemoryItem, error) {
 	req := &memoryv1.RecallRequest{
 		AgentId:   agentID,
+		ProjectId: projectID,
 		QueryText: query,
 		Depth:     memoryv1.RecallDepth_RECALL_DEPTH_AUTO,
 		TopK:      5,

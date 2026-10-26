@@ -137,6 +137,7 @@ class Distiller:
                 summary=summary,
                 salient_spans=lines[:12],
                 occurred_at_ms=envelope.now_ms(),
+                project_id=ev.swarm_id,
             )
             payload = envelope.pack(
                 self._cfg.producer,

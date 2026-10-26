@@ -160,7 +160,7 @@ def build_graph(model: ModelPort, emit: EmitDelta, nc=None):
             f"You are agent '{task.agent_id}' in a Termitaria swarm. "
             "(stub system prompt: MemoryService is not connected, so role and rules are empty)"
         )
-        facts = remembered_facts(task.context.recalled)
+        facts = remembered_facts(task.context.recalled, task.swarm_id)
         if facts:
             role = f"{role}\n\n{facts}"
         knowledge = task.context.knowledge.strip()
@@ -481,11 +481,11 @@ async def run_coworker(model, nc, task, project, gateway, sources, coworker_name
         seeds=(project or {}).get("seeds") or [],
         sources=sources,
     )
-    recalled = await _recall(nc, cid, task_text, task.task_id)
+    recalled = await _recall(nc, task.swarm_id, cid, task_text, task.task_id)
     knowledge = await _project_knowledge(task.swarm_id)
     role = (agent.get("role_prompt") or "").strip() or f"You are {cid}."
     parts = [role, "Finish the task yourself and return the result. You cannot delegate."]
-    facts = remembered_facts(recalled)
+    facts = remembered_facts(recalled, task.swarm_id)
     if facts:
         parts.append(facts)
     if knowledge and "no nodes yet" not in knowledge:
@@ -499,6 +499,7 @@ async def run_coworker(model, nc, task, project, gateway, sources, coworker_name
     handoff = coworker_handoff(text, notes)
     await publish_episode(
         nc,
+        task.swarm_id,
         cid,
         f"delegate:{task.task_id}:{cid}",
         f"Delegated task:\n{task_text.strip()[:800]}\n\n{handoff[:3000]}",
@@ -625,13 +626,14 @@ def _find_coworker(project: dict | None, name: str) -> dict | None:
     return None
 
 
-async def _recall(nc, agent_id: str, query: str, trace_id: str):
+async def _recall(nc, project_id: str, agent_id: str, query: str, trace_id: str):
     if nc is None or not agent_id:
         return []
     from termitaria.memory.v1 import memory_pb2
 
     req = memory_pb2.RecallRequest(
         agent_id=agent_id,
+        project_id=project_id or "",
         query_text=(query or "")[:1000],
         depth=memory_pb2.RECALL_DEPTH_AUTO,
         top_k=5,
@@ -762,7 +764,7 @@ async def _keep_going(bag: dict, window: list[tuple[str, str]], spoken: str | No
     return True
 
 
-async def publish_episode(nc, agent_id: str, session_id: str, summary: str, trace_id: str) -> None:
+async def publish_episode(nc, project_id: str, agent_id: str, session_id: str, summary: str, trace_id: str) -> None:
     """delegate 不开会话，所以同事做完就写一条 episode。聊天会话关闭时仍由 distiller 再写一条。"""
     summary = (summary or "").strip()
     if nc is None or not agent_id or not summary:
@@ -774,6 +776,7 @@ async def publish_episode(nc, agent_id: str, session_id: str, summary: str, trac
         session_id=session_id or "none",
         summary=summary[:4000],
         occurred_at_ms=envelope.now_ms(),
+        project_id=project_id or "",
     )
     episode.salient_spans.append(summary[:800])
     try:
@@ -786,10 +789,15 @@ async def publish_episode(nc, agent_id: str, session_id: str, summary: str, trac
         log.exception("episode publish agent=%s", agent_id)
 
 
-def remembered_facts(items, limit: int = _MAX_EPISODES) -> str:
+def remembered_facts(items, project_id: str = "", limit: int = _MAX_EPISODES) -> str:
+    project_id = (project_id or "").strip()
     lines = []
     for item in items:
         if item.kind != memory_pb2.MEMORY_KIND_EPISODE:
+            continue
+        # 只把当前 project 的 episode 注入提示词。未标记 project 的旧记忆不注入，
+        # 避免把上一个项目的假设当成当前项目的记忆。
+        if project_id and item.project_id != project_id:
             continue
         text = item.text.strip()
         if not text:
@@ -801,7 +809,7 @@ def remembered_facts(items, limit: int = _MAX_EPISODES) -> str:
         return ""
     body = "\n".join(f"- {line}" for line in lines)
     return (
-        "Your memory (episodes only you can see). "
+        "Your memory from this project (episodes only you can see). "
         "When the user asks what you remember or what you already proposed, quote these. "
         "Do not say that you have no memory while this list is present.\n"
         + body

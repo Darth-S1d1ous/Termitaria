@@ -36,6 +36,39 @@ def make_task() -> task_pb2.Task:
     )
 
 
+def test_episode_is_tagged_with_project():
+    nc = FakeNC()
+    runner = TaskRunner(nc, StubModel(chunk_delay_s=0), producer="test")
+    asyncio.run(runner.run(make_task(), "trace-1"))
+    episodes = [
+        envelope.unpack(data, memory_pb2.WriteEpisodeRequest)[1]
+        for subject, data in nc.published
+        if subject == "memory.write.episode"
+    ]
+    assert episodes
+    assert episodes[0].episode.project_id == "sw1"
+
+
+def test_remembered_facts_only_include_the_current_project():
+    items = [
+        memory_pb2.MemoryItem(
+            kind=memory_pb2.MEMORY_KIND_EPISODE, text="alpha hypothesis", project_id="p_a"
+        ),
+        memory_pb2.MemoryItem(
+            kind=memory_pb2.MEMORY_KIND_EPISODE, text="beta hypothesis", project_id="p_b"
+        ),
+        memory_pb2.MemoryItem(
+            kind=memory_pb2.MEMORY_KIND_EPISODE, text="legacy unscoped hypothesis", project_id=""
+        ),
+    ]
+    scoped = remembered_facts(items, "p_a")
+    assert "alpha hypothesis" in scoped
+    assert "beta hypothesis" not in scoped
+    assert "legacy unscoped" not in scoped
+    unscoped = remembered_facts(items)
+    assert all(text in unscoped for text in ("alpha hypothesis", "beta hypothesis", "legacy unscoped"))
+
+
 def test_envelope_roundtrip():
     data = envelope.pack("test", "trace-1", make_task())
     env, got = envelope.unpack(data, task_pb2.Task)
@@ -62,6 +95,9 @@ class FakeNC:
 
     async def publish(self, subject: str, data: bytes) -> None:
         self.published.append((subject, data))
+
+    def jetstream(self):
+        return self
 
 
 def _deltas(nc: FakeNC) -> list[task_pb2.TaskDelta]:

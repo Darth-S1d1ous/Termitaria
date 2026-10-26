@@ -36,6 +36,7 @@ examples/*
 /*.md
 !/README.md
 /protocol/
+/workspace/
 /literature/
 
 # Local build output and scratch scripts. Source for the binary is cmd/natsdev.

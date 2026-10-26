@@ -67,3 +67,48 @@ def test_recall_stays_inside_one_agent():
         assert all("critic" not in (node.get("summary") or "") for node in view["nodes"])
 
     asyncio.run(run())
+
+
+def test_recall_filters_episodes_by_project():
+    backend = _backend()
+
+    async def run() -> None:
+        for project, session, text in (
+            ("p_glossary", "s_glossary", "Glossary project hypothesis about definitions."),
+            ("p_table", "s_table", "Table-first project hypothesis about invented numbers."),
+        ):
+            await backend.write_episode(
+                memory_pb2.WriteEpisodeRequest(
+                    episode=memory_pb2.Episode(
+                        agent_id="ideator",
+                        session_id=session,
+                        summary=text,
+                        project_id=project,
+                    )
+                )
+            )
+        glossary = await backend.recall(
+            memory_pb2.RecallRequest(
+                agent_id="ideator",
+                project_id="p_glossary",
+                query_text="hypothesis",
+                top_k=5,
+            )
+        )
+        assert [item.project_id for item in glossary.items] == ["p_glossary"]
+        assert "definitions" in glossary.items[0].text
+        table = await backend.recall(
+            memory_pb2.RecallRequest(
+                agent_id="ideator",
+                project_id="p_table",
+                query_text="hypothesis",
+                top_k=5,
+            )
+        )
+        assert [item.project_id for item in table.items] == ["p_table"]
+        both = await backend.recall(
+            memory_pb2.RecallRequest(agent_id="ideator", query_text="hypothesis", top_k=5)
+        )
+        assert {item.project_id for item in both.items} == {"p_glossary", "p_table"}
+
+    asyncio.run(run())

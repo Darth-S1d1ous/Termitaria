@@ -127,7 +127,7 @@ def test_write_file_stays_in_workdir(tmp_path, monkeypatch):
     result = asyncio.run(runner.run(make_task(), "trace"))
     assert result.status == task_pb2.TASK_STATUS_COMPLETED
     assert result.message.content[0].text == "写好了"
-    assert (tmp_path / "out.md").read_text(encoding="utf-8") == "hello"
+    assert (tmp_path / "workspace" / "sw1" / "out.md").read_text(encoding="utf-8") == "hello"
     streamed = []
     for subject, data in nc.published:
         if ".delta." not in subject:
@@ -138,19 +138,50 @@ def test_write_file_stays_in_workdir(tmp_path, monkeypatch):
     assert "write_file" not in "".join(streamed)
 
 
-def test_read_file_stays_in_workdir(tmp_path, monkeypatch):
+def test_read_file_stays_in_the_project_workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("WORK_DIR", str(tmp_path))
-    (tmp_path / "protocol.md").write_text("design of record", encoding="utf-8")
+    workspace = tmp_path / "workspace" / "p"
+    workspace.mkdir(parents=True)
+    (workspace / "protocol.md").write_text("design of record", encoding="utf-8")
+    (workspace / ".env").write_text("SECRET=1", encoding="utf-8")
+    (workspace / "var" / "memory").mkdir(parents=True)
+    (workspace / "var" / "memory" / "episodes.jsonl").write_text("another agent's notes", encoding="utf-8")
     from services.worker.tools import _read_file
 
-    (tmp_path / ".env").write_text("SECRET=1", encoding="utf-8")
-    (tmp_path / "var" / "memory").mkdir(parents=True)
-    (tmp_path / "var" / "memory" / "episodes.jsonl").write_text("another agent's notes", encoding="utf-8")
-    assert asyncio.run(_read_file({"path": "protocol.md"})) == "design of record"
-    assert asyncio.run(_read_file({"path": "../outside.md"})).startswith("Refused to read")
-    assert asyncio.run(_read_file({"path": "missing.md"})).startswith("No file at")
-    assert asyncio.run(_read_file({"path": ".env"})).startswith("Refused to read hidden")
-    assert asyncio.run(_read_file({"path": "var/memory/episodes.jsonl"})).startswith("Refused to read")
+    read = _read_file("p")
+    assert asyncio.run(read({"path": "protocol.md"})) == "design of record"
+    assert asyncio.run(read({"path": "../outside.md"})).startswith("Refused to read")
+    assert asyncio.run(read({"path": "missing.md"})).startswith("No file at")
+    assert asyncio.run(read({"path": ".env"})).startswith("Refused to read hidden")
+    assert asyncio.run(read({"path": "var/memory/episodes.jsonl"})).startswith("Refused to read")
+
+
+def test_read_file_points_uploads_to_kg(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORK_DIR", str(tmp_path))
+    from services.worker.tools import _read_file
+
+    read = _read_file("p", [{"id": "u_1", "kind": "file", "title": "uploaded.md", "body": "from kg"}])
+    out = asyncio.run(read({"path": "uploaded.md"}))
+    assert "uploaded project file" in out
+    assert "kg action=read" in out
+
+
+def test_kg_read_returns_full_project_material(monkeypatch):
+    from services.worker.tools import _kg
+
+    body = "x" * 20000
+    monkeypatch.setattr(
+        "services.worker.tools.load_project",
+        lambda gateway, project_id: {
+            "seeds": [{"id": "u_1", "kind": "file", "title": "protocol.md", "body": body}]
+        },
+    )
+    out = asyncio.run(_kg("p", "http://gateway")({"action": "read", "title": "protocol.md"}))
+    assert "Project material: protocol.md" in out
+    assert body in out
+    missing = asyncio.run(_kg("p", "http://gateway")({"action": "read", "title": "missing.md"}))
+    assert "No project upload" in missing
+    assert "read_file" in missing
 
 
 def test_write_file_is_stored_as_artifact(tmp_path, monkeypatch):
@@ -164,7 +195,7 @@ def test_write_file_is_stored_as_artifact(tmp_path, monkeypatch):
     from services.worker.tools import _write_file
 
     out = asyncio.run(_write_file("http://gateway", "p")({"path": "protocol.md", "content": "hello"}))
-    assert (tmp_path / "protocol.md").read_text(encoding="utf-8") == "hello"
+    assert (tmp_path / "workspace" / "p" / "protocol.md").read_text(encoding="utf-8") == "hello"
     assert calls == [("http://gateway", "p", "protocol.md", "file", b"hello")]
     assert "Stored file" in out
 
@@ -194,7 +225,7 @@ def test_closing_round_runs_text_calls_then_asks_for_prose(tmp_path, monkeypatch
     body = result.message.content[0].text
     assert result.status == task_pb2.TASK_STATUS_COMPLETED
     assert body == "两份都写好了。"
-    assert (tmp_path / "b.md").read_text(encoding="utf-8") == "y"
+    assert (tmp_path / "workspace" / "sw1" / "b.md").read_text(encoding="utf-8") == "y"
     streamed = []
     for subject, data in nc.published:
         if ".delta." not in subject:
