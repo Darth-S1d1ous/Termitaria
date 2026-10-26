@@ -32,6 +32,9 @@ data/
 examples/*
 !examples/swarms/
 !examples/swarms/**
+# 课堂 demo 文档要进仓库；case materials 仍留在本地。
+!examples/demos/
+!examples/demos/**
 # A new draft written at the repo root stays local. README.md stays tracked.
 /*.md
 !/README.md
