@@ -48,3 +48,6 @@ examples/*
 
 crewAI
 loop_mem_benchmark
+
+demo_video/
+.env_old

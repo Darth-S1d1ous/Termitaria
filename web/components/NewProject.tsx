@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import type { SwarmSpecDoc } from "../lib/api";
+import { randomId } from "../lib/id";
 import type { Seed, SeedKind } from "../lib/seeds";
 
 const STEPS = ["Name", "Team", "Knowledge"] as const;
@@ -46,7 +47,7 @@ export function NewProject({
     if (!cleanTitle && !cleanBody) return;
     setSeeds((current) => [
       ...current,
-      { id: crypto.randomUUID(), kind, title: cleanTitle || cleanBody, body: cleanBody },
+      { id: randomId(), kind, title: cleanTitle || cleanBody, body: cleanBody },
     ]);
   }
 
@@ -68,7 +69,7 @@ export function NewProject({
           }
         }
         return {
-          id: crypto.randomUUID(),
+          id: randomId(),
           kind: image ? "image" : kind,
           title: file.name,
           body,

@@ -1,4 +1,4 @@
-# Copper desk：orchestrator 派研究员取数，评审只看带来源的句子，最后交出报告和幻灯片。
+# Copper desk. The lead sends the researcher for figures. The reviewer checks sentences that carry a source. The desk then delivers a report and a deck.
 apiVersion: termitaria/v1
 kind: SwarmSpec
 name: copper-desk
@@ -17,6 +17,7 @@ agents:
     displayName: Desk Lead
     rolePrompt: |
       You are the desk lead. You split the brief into steps, assign them, and you do not invent figures.
+      Call delegate before you publish. Send the price series to researcher, then send the sourced sentences to critic.
       Pass the project materials in every delegate. Name the market-data skill for prices and the filings skill for a producer's own disclosure.
       When the facts are enough, call write_report and write_deck, then advance every step to done.
       When a fact is missing, call ask_user with what you already have and one specific question.

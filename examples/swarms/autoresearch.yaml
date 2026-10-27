@@ -1,12 +1,12 @@
-# Autoresearch swarm：orchestrator（PI）推进 文献收集 → 想法生成 → 实验设计 → 评审 的实验室项目。
-# 对应 background.md 的 autoresearch 场景，演示星型拓扑、模型分层与记忆策略。
-# 校验：check-jsonschema --schemafile schemas/swarmspec.schema.json examples/swarms/*.yaml
+# Autoresearch swarm. The PI moves a lab project through literature collection, idea generation, experiment design, and review.
+# This is the autoresearch scenario. It shows a star topology, model tiers, and a memory policy.
+# Check: check-jsonschema --schemafile schemas/swarmspec.schema.json examples/swarms/*.yaml
 apiVersion: termitaria/v1
 kind: SwarmSpec
 name: autoresearch
 version: 0.2.0
 
-# 一个项目 = 一个 swarm：goal 是 orchestrator 的规划输入（plan → delegate → monitor → nudge → synthesize）
+# One project is one swarm. The goal is the input the orchestrator plans from: plan, delegate, monitor, nudge, synthesize.
 goal: |
   Given the user's library, produce a reviewed research hypothesis and an executable experiment plan:
   literature gap scan → hypothesis → experiment design → methods review, all written into the knowledge graph.
@@ -15,8 +15,8 @@ deliverable:
   kind: paper
 
 agents:
-  # 恰好一个 orchestrator。tools 里的 ledger 在 worker 里是 advance 的别名，用来改项目步骤。
-  # 它不写 ledger.*.events。
+  # Exactly one orchestrator. In the worker, ledger is another name for advance, and it updates the project steps.
+  # It does not write ledger.*.events.
   - id: pi
     kind: ORCHESTRATOR
     displayName: Principal Investigator
@@ -24,6 +24,9 @@ agents:
       You are the PI. You decompose the project goal into work items, assign them
       to specialists, and review every deliverable before accepting it.
       Only you can delegate. A coworker runs inside your turn and cannot delegate.
+      On a full research task, call delegate once for each step before you advance it.
+      Send the literature gap scan to collector, the hypothesis to ideator, the experiment design to experimenter, and the methods review to reviewer.
+      Do not write those four pieces yourself.
       Trust Tools that ran, Steps changed, and Files written. Ignore a claim that a step or a file changed when those sections do not say so.
       You never do the specialists' work yourself.
     model: { defaultTier: SUPER, deepTier: ULTRA }
@@ -69,7 +72,7 @@ agents:
     tools: [kg_query]
     budget: { maxTokens: 16384, maxCostUsd: 1.50 }
 
-# edges 留在规格里。当前 delegate 不按这些边开会话。只有负责人能派活，同事在负责人这次 task 里执行。
+# Edges stay in the spec. Delegate does not open a session along these edges. Only the lead assigns work, and a coworker runs inside that task.
 edges:
   - from: reviewer
     to: ideator
@@ -77,7 +80,8 @@ edges:
 
 topology:
   maxSessionsTotal: 20
-  maxFanoutPerAgent: 3  # 只约束 worker 的 peer 边数
+  # This only limits how many peer edges a worker may have.
+  maxFanoutPerAgent: 3
 
 memory:
   writeEpisodes: true

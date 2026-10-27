@@ -17,6 +17,7 @@ import {
 } from "../lib/api";
 import { AnimalIcon, markFor } from "../lib/animals";
 import { colorFor, fileTitle, formatBytes, formatTime, initials, preview, statusLine } from "../lib/format";
+import { randomId } from "../lib/id";
 import { MessageBody } from "../lib/markdown";
 import { deleteSeeds, loadSeeds, saveSeeds, type Seed } from "../lib/seeds";
 import type { Chat, ChatMessage, MeshEdge, Project, ProjectArtifact, ProjectStep, View } from "../lib/types";
@@ -444,7 +445,7 @@ export function AppShell() {
       ? project?.agents.find((agent) => agent.id === mention)
       : undefined;
     const sent = mentioned ? `@${mentioned.display_name} ${text}` : text;
-    const clientMsgId = crypto.randomUUID().replace(/-/g, "");
+    const clientMsgId = randomId();
     const pending: ChatMessage = {
       id: `m_${clientMsgId}`,
       role: "user",
