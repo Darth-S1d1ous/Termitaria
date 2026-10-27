@@ -760,6 +760,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 .template-card strong { font-size: 14px; }
 
+.template-card em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--accent-deep);
+}
+
 .template-card span {
   color: var(--muted);
   font-size: 12px;
@@ -775,17 +781,142 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   background: white;
 }
 
-.team-layout .spec-slot { padding: 16px; }
+.team-preview {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 24px 28px;
+}
+
+.team-goal {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.member-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.member-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fafafa;
+}
+
+.member-list strong { font-size: 14px; }
+
+.member-list span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.team-empty {
+  margin: auto;
+  max-width: 320px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.team-empty strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.team-empty p { margin: 0; }
+
+.spec-fold {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.spec-fold summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.spec-fold .spec-slot { padding-top: 12px; }
+
+.spec-fold .spec-yaml { min-height: 220px; }
 
 .knowledge {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
+  gap: 24px;
+  align-items: start;
+  padding: 16px 20px 28px;
+}
+
+.knowledge-form,
+.knowledge-added {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 16px 20px 28px;
-  max-width: 720px;
+  min-width: 0;
+}
+
+.field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.knowledge .name-field textarea { min-height: 160px; }
+
+.knowledge .file-row .text-btn {
+  border: 1px solid var(--line);
+}
+
+.knowledge .seed-list li {
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fafafa;
+}
+
+.knowledge .seed-list li.slot-hint {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.seed-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.knowledge .seed-title { flex: none; }
+
+.seed-body {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .name-field textarea {
@@ -1317,6 +1448,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   .rail-scroll { flex: 1; padding: 0 8px; }
 
   .chat-list, .conversation, .builder, .blank, .kg, .artifacts-pane { grid-row: 2; }
+
   .shell.has-plan { grid-template-rows: 64px auto minmax(0, 1fr); }
   .shell.has-plan > .plan-wrap { grid-column: 1; grid-row: 2; }
   .shell.has-plan > .chat-list,
@@ -1338,6 +1470,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
   .msg { max-width: 88%; }
 
-  .slots, .team-layout { grid-template-columns: 1fr; }
+  .slots, .team-layout, .knowledge { grid-template-columns: 1fr; }
   .templates { border-right: 0; border-bottom: 1px solid var(--line); max-height: 220px; }
 }
