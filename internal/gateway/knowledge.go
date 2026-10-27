@@ -176,7 +176,8 @@ func (s *Server) projectSeeds(id string) []seedJSON {
 	return nil
 }
 
-// 上传的文件先作为 document 出现。Graphiti 抽出的实体和关系随后从查询里一起回来。
+// 创建时保存的材料（k_）和后来上传的文件（u_）先作为 document 出现。
+// Graphiti 抽出的实体和关系随后从查询里一起回来。
 func attachUploads(view *projectGraphJSON, projectID string, seeds []seedJSON) {
 	if view == nil {
 		return
@@ -186,7 +187,7 @@ func attachUploads(view *projectGraphJSON, projectID string, seeds []seedJSON) {
 		have[node.ID] = true
 	}
 	for _, seed := range seeds {
-		if !strings.HasPrefix(seed.ID, "u_") || strings.TrimSpace(seed.Body) == "" {
+		if (!strings.HasPrefix(seed.ID, "k_") && !strings.HasPrefix(seed.ID, "u_")) || strings.TrimSpace(seed.Body) == "" {
 			continue
 		}
 		id := projectID + "/" + seed.ID

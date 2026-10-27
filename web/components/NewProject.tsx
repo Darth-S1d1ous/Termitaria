@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type DragEvent } from "react";
 import type { SwarmSpecDoc } from "../lib/api";
 import { randomId } from "../lib/id";
 import type { Seed, SeedKind } from "../lib/seeds";
@@ -76,6 +76,7 @@ export function NewProject({
   const [seeds, setSeeds] = useState<Seed[]>([]);
   const [note, setNote] = useState("");
   const [link, setLink] = useState("");
+  const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLInputElement>(null);
 
@@ -125,6 +126,14 @@ export function NewProject({
       }),
     );
     setSeeds((current) => [...current, ...next]);
+  }
+
+  function onDropFiles(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragging(false);
+    const files = event.dataTransfer.files;
+    if (!files?.length) return;
+    void addFiles(files, "file");
   }
 
   const primaryDisabled =
@@ -300,13 +309,28 @@ export function NewProject({
                 Add link
               </button>
             </form>
-            <div className="file-row">
-              <button className="text-btn" type="button" onClick={() => fileRef.current?.click()}>
-                Add files
-              </button>
-              <button className="text-btn" type="button" onClick={() => imageRef.current?.click()}>
-                Add images
-              </button>
+            <div
+              className={`drop-zone${dragging ? " dragging" : ""}`}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={(event) => {
+                if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                setDragging(false);
+              }}
+              onDrop={onDropFiles}
+            >
+              <span className="slot-label">Files</span>
+              <p className="slot-hint">Drop files or images here, or choose them below.</p>
+              <div className="file-row">
+                <button className="text-btn" type="button" onClick={() => fileRef.current?.click()}>
+                  Add files
+                </button>
+                <button className="text-btn" type="button" onClick={() => imageRef.current?.click()}>
+                  Add images
+                </button>
+              </div>
             <input
               ref={fileRef}
               type="file"

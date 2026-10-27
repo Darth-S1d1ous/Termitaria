@@ -77,16 +77,21 @@ func TestAttachUploadsShowsTheFile(t *testing.T) {
 	attachUploads(&view, "p_north", []seedJSON{
 		{ID: "k_old", Kind: "text", Title: "Seed", Body: "already in the prompt"},
 		{ID: "u_file", Kind: "file", Title: "notes.md", Body: "Copper closed at 9840."},
+		{ID: "scratch", Kind: "text", Title: "Skip", Body: "not a stored seed"},
 	})
-	if len(view.Nodes) != 2 {
+	if len(view.Nodes) != 3 {
 		t.Fatalf("nodes = %+v", view.Nodes)
 	}
-	doc := view.Nodes[1]
+	seed := view.Nodes[1]
+	if seed.ID != "p_north/k_old" || seed.Kind != "DOCUMENT" || seed.Text != "already in the prompt" {
+		t.Fatalf("seed = %+v", seed)
+	}
+	doc := view.Nodes[2]
 	if doc.ID != "p_north/u_file" || doc.Kind != "DOCUMENT" || doc.Title != "notes.md" || doc.Text != "Copper closed at 9840." {
 		t.Fatalf("upload = %+v", doc)
 	}
 	attachUploads(&view, "p_north", []seedJSON{{ID: "u_file", Kind: "file", Title: "notes.md", Body: "Copper closed at 9840."}})
-	if len(view.Nodes) != 2 {
+	if len(view.Nodes) != 3 {
 		t.Fatalf("duplicated nodes = %+v", view.Nodes)
 	}
 }
