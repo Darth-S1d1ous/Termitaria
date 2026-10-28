@@ -507,7 +507,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   flex: none;
   align-self: flex-end;
   height: 42px;
-  max-width: 210px;
+  max-width: 280px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background-color: var(--hover);
@@ -524,6 +524,42 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 }
 
 .model-select:disabled { color: var(--faint); cursor: default; }
+
+.model-picker {
+  position: relative;
+  flex: none;
+  align-self: flex-end;
+}
+
+.model-menu {
+  position: absolute;
+  z-index: 6;
+  left: 0;
+  bottom: 48px;
+  width: 260px;
+  max-height: 360px;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.model-menu button {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.model-menu button[aria-selected="true"] { background: var(--hover); }
 
 .send {
   width: 42px;

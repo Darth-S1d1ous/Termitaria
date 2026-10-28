@@ -826,9 +826,12 @@ function Conversation({
   const endRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const [picking, setPicking] = useState(false);
+  const [modelOpen, setModelOpen] = useState(false);
+  const currentModel = models.find((item) => item.id === model);
 
   useEffect(() => {
     setPicking(false);
+    setModelOpen(false);
   }, [chat?.id]);
 
   useEffect(() => {
@@ -960,20 +963,38 @@ function Conversation({
           </div>
         ) : null}
         {models.length > 0 ? (
-          <select
-            className="model-select"
-            aria-label="Model"
-            title="Model for the next reply"
-            value={model}
-            disabled={!chat.enabled || busy}
-            onChange={(event) => onModel(event.target.value)}
-          >
-            {models.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.label}
-              </option>
-            ))}
-          </select>
+          <div className="model-picker">
+            <button
+              type="button"
+              className="model-select"
+              aria-label="Model"
+              aria-expanded={modelOpen}
+              title="Model for the next reply"
+              disabled={!chat.enabled || busy}
+              onClick={() => setModelOpen((open) => !open)}
+            >
+              {currentModel?.label ?? "Model"}
+            </button>
+            {modelOpen ? (
+              <ul className="model-menu" role="listbox" aria-label="Models">
+                {models.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={item.id === model}
+                      onClick={() => {
+                        onModel(item.id);
+                        setModelOpen(false);
+                      }}
+                    >
+                      {item.label}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
         ) : null}
         <textarea
           ref={boxRef}
