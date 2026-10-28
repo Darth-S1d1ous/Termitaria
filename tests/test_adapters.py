@@ -38,6 +38,15 @@ def test_nebius_without_key_stays_stub():
     assert isinstance(port, StubModel)
 
 
+def test_nebius_defaults_to_nemotron_super(monkeypatch):
+    monkeypatch.delenv("MODEL_TIER_SUPER", raising=False)
+    port = build_model(
+        ModelConfig(provider="nebius-token-factory", nebius_api_key="nb", model="stub-model")
+    )
+    assert isinstance(port, OpenAIChatModel)
+    assert port.default_model == "nvidia/nemotron-3-super-120b-a12b"
+
+
 def test_deepseek_maps_catalog_name_and_parses_tool_calls():
     seen = {}
 

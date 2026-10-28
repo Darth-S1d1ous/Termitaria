@@ -264,6 +264,7 @@ def make_toolbox(
     deliverable: dict | None = None,
     sources: set | None = None,
     delegate_run: Callable[[str, str, str], Awaitable[str]] | None = None,
+    can_delegate: bool = True,
 ) -> Toolbox:
     listed = [item for item in (agent.get("tools") or []) if item]
     names = set(listed)
@@ -284,6 +285,8 @@ def make_toolbox(
         names.update(["delegate", "advance"])
     if kind == "ORCHESTRATOR":
         names.update(["ask_user", "write_report", "write_deck"])
+    if not can_delegate:
+        names.discard("delegate")
     tools: list[Tool] = []
     if "web_search" in names:
         tools.append(Tool(
@@ -1050,16 +1053,21 @@ def report_error(body: str, deliverable: dict | None, sources: set | None) -> st
         text = found.get(heading.casefold())
         if text is None:
             return f"write_report is missing the section {heading}"
-        if len(text) < int(section.get("min_chars") or 0):
-            return f"write_report section {heading} is too short"
+        minimum = int(section.get("min_chars") or 0)
+        if len(text) < minimum:
+            return (
+                f"write_report section {heading} is too short: "
+                f"{len(text)} characters, needs at least {minimum}"
+            )
     for section in deliverable.get("sections") or []:
         if not section.get("citations"):
             continue
         heading = str(section.get("heading") or "").strip()
         if not _has_known_link(found.get(heading.casefold(), ""), known):
             return f"write_report section {heading} needs a link that a tool returned"
-    if len(body) < int(deliverable.get("min_chars") or 0):
-        return "write_report is too short"
+    minimum = int(deliverable.get("min_chars") or 0)
+    if len(body) < minimum:
+        return f"write_report is too short: {len(body)} characters, needs at least {minimum}"
     return ""
 
 
@@ -1075,6 +1083,9 @@ def _report_description(deliverable: dict | None) -> str:
         "A section that asks for a link must include one URL a tool already returned.",
         "Other links and design numbers can stay in the text.",
     ]
+    minimum = int(deliverable.get("min_chars") or 0)
+    if minimum:
+        lines.append(f"The whole body must be at least {minimum} characters.")
     for section in deliverable.get("sections") or []:
         heading = section.get("heading") or ""
         minimum = int(section.get("min_chars") or 0)

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -31,8 +32,11 @@ func reportError(body string, d *swarm.Deliverable, urls []string) string {
 		if !ok {
 			return "write_report is missing the section " + section.Heading
 		}
-		if utf8.RuneCountInString(text) < section.MinChars {
-			return "write_report section " + section.Heading + " is too short"
+		if count := utf8.RuneCountInString(text); count < section.MinChars {
+			return fmt.Sprintf(
+				"write_report section %s is too short: %d characters, needs at least %d",
+				section.Heading, count, section.MinChars,
+			)
 		}
 	}
 	for _, section := range d.Sections {
@@ -44,8 +48,11 @@ func reportError(body string, d *swarm.Deliverable, urls []string) string {
 			return "write_report section " + section.Heading + " needs a link that a tool returned"
 		}
 	}
-	if utf8.RuneCountInString(strings.TrimSpace(body)) < d.MinChars {
-		return "write_report is too short"
+	if count := utf8.RuneCountInString(strings.TrimSpace(body)); count < d.MinChars {
+		return fmt.Sprintf(
+			"write_report is too short: %d characters, needs at least %d",
+			count, d.MinChars,
+		)
 	}
 	return ""
 }

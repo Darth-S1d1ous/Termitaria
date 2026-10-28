@@ -8,7 +8,9 @@ plugins:
     out: gen/go
     opt: paths=source_relative
   # 控制面 API 走 Connect-RPC（contracts.md §5），同时获得 REST + gRPC 绑定
-  - remote: buf.build/connectrpc/go
+  # 版本与 go.mod 的 connectrpc.com/connect 对齐；不锁版本会拉到 v2 生成器，
+  # 生成 connectrpc.com/connect/v2 的 import，而 go.mod 只有 v1。
+  - remote: buf.build/connectrpc/go:v1.21.0
     out: gen/go
     opt: paths=source_relative
   # Python 智能面（LangGraph workers / Memory / Knowledge Graph）

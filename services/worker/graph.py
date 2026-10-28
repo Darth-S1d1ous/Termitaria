@@ -124,6 +124,7 @@ def build_graph(model: ModelPort, emit: EmitDelta, nc=None):
                 "id": item.get("id") or "",
                 "display_name": item.get("display_name") or "",
                 "kind": item.get("kind") or "",
+                "role": item.get("role_prompt") or "",
                 "skills": [name for name in (item.get("skills") or []) if name],
             })
         seeds = (project or {}).get("seeds") or []
@@ -146,6 +147,7 @@ def build_graph(model: ModelPort, emit: EmitDelta, nc=None):
             deliverable=(project or {}).get("deliverable"),
             sources=sources,
             delegate_run=delegate_run if (agent.get("kind") or "") == "ORCHESTRATOR" else None,
+            can_delegate=bool(roster),
         )
         held["tools"] = toolbox
         held["sources"] = sources
@@ -166,7 +168,8 @@ def build_graph(model: ModelPort, emit: EmitDelta, nc=None):
         knowledge = task.context.knowledge.strip()
         if knowledge:
             role = f"{role}\n\n{knowledge}"
-        system = _system(role, rules, catalog_skills, toolbox, roster, steps, materials_text(seeds))
+        coworkers = roster if (agent.get("kind") or "") == "ORCHESTRATOR" else []
+        system = _system(role, rules, catalog_skills, toolbox, coworkers, steps, materials_text(seeds))
         window = [(_sender(m), _first_text(m)) for m in task.context.window]
         return {"system": system, "window": window}
 
@@ -841,11 +844,17 @@ def _system(role: str, rules: str, skills, toolbox: Toolbox, roster: list[dict],
             lines.append(f"- {skill.name}: {skill.description}")
         parts.append("\n".join(lines))
     if roster:
-        lines = ["Coworkers (delegate with coworker set to the id):"]
+        lines = [
+            "Your team (delegate with coworker set to the id). "
+            "The role under each name belongs to that coworker, not to you:"
+        ]
         for person in roster:
             bound = person.get("skills") or []
             extra = f" skills: {', '.join(bound)}" if bound else ""
             lines.append(f"- {person['id']}（{person['display_name']}）{extra}")
+            role = " ".join((person.get("role") or "").split())
+            if role:
+                lines.append(f"  Role: {role}")
         parts.append("\n".join(lines))
     if steps:
         lines = ["Project progress. Call advance when a step is finished:"]
@@ -909,19 +918,25 @@ def _forced_ask(held: dict, window: list[tuple[str, str]]) -> str:
         if step.get("state") == "active":
             active = step.get("label") or active
             break
+    kind = str((held.get("deliverable") or {}).get("kind") or "brief")
+    noun = "paper" if kind == "paper" else "brief"
     if "write_report" in known and (
-        "too short" in known or "missing the section" in known or "needs a link" in known
+        "too short" in known
+        or "missing the section" in known
+        or "needs a link" in known
+        or "uses a link no tool returned" in known
     ):
-        reason = known if len(known) <= 300 else known[:300]
+        reason = known.split(" → ", 1)[-1]
+        reason = reason if len(reason) <= 300 else reason[:300]
         return (
             f"What I already have:\n{known}\n\n"
             f"Question:\nThe step \"{active}\" is still open because {reason} "
-            "Should I revise the report to satisfy that check and store it again?"
+            f"Should I revise the {noun} to satisfy that check and store it again?"
         )
     return (
         f"What I already have:\n{known}\n\n"
         f"Question:\nThe step \"{active}\" is still open. "
-        "Which source should I open before I write the brief?"
+        f"Which source should I open before I write the {noun}?"
     )
 
 

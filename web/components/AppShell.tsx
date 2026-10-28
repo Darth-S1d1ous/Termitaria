@@ -77,6 +77,7 @@ export function AppShell() {
   const [draft, setDraft] = useState("");
   const [specs, setSpecs] = useState<SwarmSpecDoc[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [defaultModelId, setDefaultModelId] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
   const [seeds, setSeeds] = useState<Seed[]>([]);
   const [waiting, setWaiting] = useState<Record<string, boolean>>({});
@@ -171,11 +172,11 @@ export function AppShell() {
       .then((data) => {
         if (cancel) return;
         const enabled = data.models.filter((item) => item.enabled);
+        const fallback = enabled.find((item) => item.id === data.default_id)?.id ?? enabled[0]?.id ?? "";
         setModels(enabled);
+        setDefaultModelId(fallback);
         setSelectedModel((current) =>
-          current && enabled.some((item) => item.id === current)
-            ? current
-            : enabled.find((item) => item.id === data.default_id)?.id ?? enabled[0]?.id ?? "",
+          current && enabled.some((item) => item.id === current) ? current : fallback,
         );
       })
       .catch(() => {
@@ -224,8 +225,10 @@ export function AppShell() {
   useEffect(() => {
     if (!chatId || models.length === 0) return;
     const saved = localStorage.getItem(`termitaria.model.${chatId}`);
-    setSelectedModel(saved && models.some((item) => item.id === saved) ? saved : models[0].id);
-  }, [chatId, models]);
+    setSelectedModel(
+      saved && models.some((item) => item.id === saved) ? saved : defaultModelId || models[0].id,
+    );
+  }, [chatId, models, defaultModelId]);
 
   useEffect(() => {
     if (!projectId || !chatId) return;

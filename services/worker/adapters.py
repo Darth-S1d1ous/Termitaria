@@ -9,10 +9,13 @@ from __future__ import annotations
 import logging
 import os
 
-from .model import DEFAULT_MAX_TOKENS, ModelConfig, ModelPort, StubModel
+from .model import DEFAULT_MAX_TOKENS, DEFAULT_MODEL, ModelConfig, ModelPort, StubModel
 from .openai_chat import OpenAIChatModel
 
 _log = logging.getLogger(__name__)
+
+# Same fallback the gateway uses for its "Nemotron 3 Super (Nebius)" option.
+_DEFAULT_NEMOTRON_SUPER = "nvidia/nemotron-3-super-120b-a12b"
 
 
 def cloud_enabled() -> bool:
@@ -43,8 +46,13 @@ class NebiusAdapter:
 
     def create(self, cfg: ModelConfig):
         if not cfg.nebius_api_key:
+            _log.warning(
+                "MODEL_PROVIDER=nebius-token-factory without NEBIUS_API_KEY, falling back to StubModel"
+            )
             return StubModel()
         default = os.environ.get("MODEL_TIER_SUPER") or cfg.model
+        if default in {"", "stub-model", DEFAULT_MODEL}:
+            default = _DEFAULT_NEMOTRON_SUPER
         return OpenAIChatModel(
             cfg.nebius_api_key,
             provider=self.provider,

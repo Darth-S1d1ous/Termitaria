@@ -366,6 +366,22 @@ def test_workers_get_default_tools_without_spec():
     assert "write_report" in lead.names()
 
 
+def test_orchestrator_without_coworkers_has_no_delegate():
+    from services.worker.tools import make_toolbox
+
+    lead = make_toolbox(
+        agent={"id": "lead", "kind": "ORCHESTRATOR", "tools": ["ledger"]},
+        project_id="p",
+        steps=[],
+        skills=[],
+        mcp_tools=[],
+        gateway="http://127.0.0.1:9",
+        can_delegate=False,
+    )
+    assert "delegate" not in lead.names()
+    assert "advance" in lead.names()
+
+
 def test_report_requires_sections_and_tool_links():
     from services.worker.tools import report_error
 

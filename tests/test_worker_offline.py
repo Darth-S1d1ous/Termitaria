@@ -168,13 +168,20 @@ def test_prompt_keeps_five_remembered_facts():
     items = [
         memory_pb2.MemoryItem(kind=memory_pb2.MEMORY_KIND_ROLE, text="ROLE-STAYS"),
         *[
-            memory_pb2.MemoryItem(kind=memory_pb2.MEMORY_KIND_EPISODE, text=text)
+            memory_pb2.MemoryItem(
+                kind=memory_pb2.MEMORY_KIND_EPISODE, text=text, project_id="sw1"
+            )
             for text in facts
         ],
-        memory_pb2.MemoryItem(kind=memory_pb2.MEMORY_KIND_EPISODE, text="   "),
+        memory_pb2.MemoryItem(
+            kind=memory_pb2.MEMORY_KIND_EPISODE, text="   ", project_id="sw1"
+        ),
     ]
     block = remembered_facts(items)
-    assert block == "Remembered facts:\n" + "\n".join(f"- {text}" for text in facts[:5])
+    assert block.startswith("Your memory from this project")
+    assert block.endswith("\n" + "\n".join(f"- {text}" for text in facts[:5]))
+    assert "FACT-5-UNIQUE" not in block
+    assert "ROLE-STAYS" not in block
     assert remembered_facts([]) == ""
 
     task = make_task()
@@ -196,7 +203,7 @@ def test_prompt_keeps_five_remembered_facts():
 
     assert result.status == task_pb2.TASK_STATUS_COMPLETED
     assert "ROLE-STAYS" in model.system
-    assert "Remembered facts:" in model.system
+    assert "Your memory from this project" in model.system
     assert "FACT-4-UNIQUE" in model.system
     assert "FACT-5-UNIQUE" not in model.system
 
