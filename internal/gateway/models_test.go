@@ -35,12 +35,20 @@ func TestModelOptionsStayDeepSeekOnlyUntilCloudIsEnabled(t *testing.T) {
 	if _, err := resolveModel("nebius-nemotron-super"); err == nil {
 		t.Fatal("cloud model should be disabled")
 	}
+	if _, err := resolveModel("nebius-kimi-k3"); err == nil {
+		t.Fatal("kimi should be disabled")
+	}
+	if _, err := resolveModel("nebius-minimax-m3"); err == nil {
+		t.Fatal("minimax should be disabled")
+	}
 }
 
 func TestModelOptionsExposeCloudModelsWhenEnabled(t *testing.T) {
 	t.Setenv("MODEL_CLOUD_ENABLED", "1")
 	t.Setenv("NEBIUS_API_KEY", "nb")
 	t.Setenv("NVIDIA_API_KEY", "")
+	t.Setenv("DEEPSEEK_MODEL_FLASH", "")
+	t.Setenv("DEEPSEEK_MODEL_PRO", "")
 	t.Setenv("MODEL_TIER_SUPER", "nvidia/nemotron-3-super-120b-a12b")
 
 	options := modelOptions()
@@ -59,6 +67,36 @@ func TestModelOptionsExposeCloudModelsWhenEnabled(t *testing.T) {
 	}
 	if ref.GetProvider() != "nebius-token-factory" || ref.GetModel() != "nvidia/nemotron-3-super-120b-a12b" {
 		t.Fatalf("model = %+v", ref)
+	}
+	flash, err := resolveModel("deepseek-flash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flash.GetProvider() != "nebius-token-factory" || flash.GetModel() != "deepseek-ai/DeepSeek-V4.1-Flash" {
+		t.Fatalf("flash = %+v", flash)
+	}
+	pro, err := resolveModel("deepseek-v4-pro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pro.GetProvider() != "nebius-token-factory" || pro.GetModel() != "deepseek-ai/DeepSeek-V4-Pro" {
+		t.Fatalf("pro = %+v", pro)
+	}
+	want := map[string]string{
+		"nebius-kimi-k3":            "moonshotai/Kimi-K3",
+		"nebius-kimi-k2.6":          "moonshotai/Kimi-K2.6",
+		"nebius-kimi-k2.7-code":     "moonshotai/Kimi-K2.7-Code",
+		"nebius-minimax-m3":         "MiniMaxAI/MiniMax-M3",
+		"nebius-minimax-m3.1-flash": "MiniMaxAI/MiniMax-M3.1-Flash",
+	}
+	for id, model := range want {
+		got, err := resolveModel(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.GetProvider() != "nebius-token-factory" || got.GetModel() != model {
+			t.Fatalf("%s = %+v", id, got)
+		}
 	}
 }
 

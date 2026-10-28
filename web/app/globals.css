@@ -994,6 +994,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   padding: 8px 12px 0;
 }
 
+.chat-list > .pane-switch {
+  padding-bottom: 12px;
+}
+
 .kg .pane-switch { padding: 0; }
 
 .pane-switch button {

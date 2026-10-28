@@ -37,16 +37,25 @@ func modelCloudEnabled() bool {
 }
 
 func modelOptions() []modelOption {
+	// 有 Nebius key 时，下拉里的 DeepSeek 走 Token Factory，不再要 DEEPSEEK_API_KEY。
+	// 模型 id 以 api.tokenfactory.nebius.com 的目录为准。
+	flashProvider, proProvider := "deepseek", "deepseek"
+	flashModel, proModel := "deepseek-flash", "deepseek-v4-pro"
+	if modelCloudEnabled() && strings.TrimSpace(os.Getenv("NEBIUS_API_KEY")) != "" {
+		flashProvider, proProvider = "nebius-token-factory", "nebius-token-factory"
+		flashModel = "deepseek-ai/DeepSeek-V4.1-Flash"
+		proModel = "deepseek-ai/DeepSeek-V4-Pro"
+	}
 	options := []modelOption{
 		{
 			ID: "deepseek-flash", Label: modelEnv("DEEPSEEK_MODEL_FLASH_LABEL", "DeepSeek-V4.1-Flash"),
-			Provider: "deepseek",
-			Model:    modelEnv("DEEPSEEK_MODEL_FLASH", "deepseek-flash"), Tier: "SUPER", Enabled: true,
+			Provider: flashProvider,
+			Model:    modelEnv("DEEPSEEK_MODEL_FLASH", flashModel), Tier: "SUPER", Enabled: true,
 		},
 		{
 			ID: "deepseek-v4-pro", Label: modelEnv("DEEPSEEK_MODEL_PRO_LABEL", "DeepSeek-V4-Pro"),
-			Provider: "deepseek",
-			Model:    modelEnv("DEEPSEEK_MODEL_PRO", "deepseek-v4-pro"), Tier: "SUPER", Enabled: true,
+			Provider: proProvider,
+			Model:    modelEnv("DEEPSEEK_MODEL_PRO", proModel), Tier: "SUPER", Enabled: true,
 		},
 	}
 	if !modelCloudEnabled() {
@@ -65,6 +74,31 @@ func modelOptions() []modelOption {
 				Provider: "nebius-token-factory",
 				Model:    modelEnv("MODEL_TIER_ULTRA", "nvidia/Nemotron-3-Ultra-550b-a55b"),
 				Tier:     "ULTRA", Enabled: true,
+			},
+			modelOption{
+				ID: "nebius-kimi-k3", Label: "Kimi K3",
+				Provider: "nebius-token-factory",
+				Model:    "moonshotai/Kimi-K3", Tier: "SUPER", Enabled: true,
+			},
+			modelOption{
+				ID: "nebius-kimi-k2.6", Label: "Kimi K2.6",
+				Provider: "nebius-token-factory",
+				Model:    "moonshotai/Kimi-K2.6", Tier: "SUPER", Enabled: true,
+			},
+			modelOption{
+				ID: "nebius-kimi-k2.7-code", Label: "Kimi K2.7 Code",
+				Provider: "nebius-token-factory",
+				Model:    "moonshotai/Kimi-K2.7-Code", Tier: "SUPER", Enabled: true,
+			},
+			modelOption{
+				ID: "nebius-minimax-m3", Label: "MiniMax M3",
+				Provider: "nebius-token-factory",
+				Model:    "MiniMaxAI/MiniMax-M3", Tier: "SUPER", Enabled: true,
+			},
+			modelOption{
+				ID: "nebius-minimax-m3.1-flash", Label: "MiniMax M3.1 Flash",
+				Provider: "nebius-token-factory",
+				Model:    "MiniMaxAI/MiniMax-M3.1-Flash", Tier: "SUPER", Enabled: true,
 			},
 		)
 	}
