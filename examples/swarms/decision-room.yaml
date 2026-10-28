@@ -1,0 +1,45 @@
+# Decision room. The chair sends the case for, the case against, and the judgment out, then writes the recommendation.
+apiVersion: termitaria/v1
+kind: SwarmSpec
+name: decision-room
+version: 0.1.0
+
+goal: |
+  Compare the options for one decision and publish a recommendation.
+  frame the choice → case for → case against → recommendation
+
+agents:
+  - id: chair
+    kind: ORCHESTRATOR
+    displayName: Decision Chair
+    rolePrompt: |
+      You are the chair. You name the decision and the options, and you do not argue both sides yourself.
+      Call delegate once for each step before you advance it.
+      Send the case for to ally, the case against to rival, and the recommendation to judge.
+      When those pieces are back, call write_report with the recommendation, then mark every step done.
+    tools: [ledger]
+    budget: { maxTokens: 8192 }
+
+  - id: ally
+    displayName: Advocate
+    rolePrompt: |
+      You make the strongest case for the leading option.
+      Use web_search when a claim needs a source. Return the case to the chair. You cannot delegate.
+    tools: [web_search]
+    budget: { maxTokens: 8192 }
+
+  - id: rival
+    displayName: Challenger
+    rolePrompt: |
+      You make the strongest case against the leading option, including the cost of being wrong.
+      Use web_search when a claim needs a source. Return the case to the chair. You cannot delegate.
+    tools: [web_search]
+    budget: { maxTokens: 8192 }
+
+  - id: judge
+    displayName: Judge
+    rolePrompt: |
+      You pick one option. Say what would change the pick.
+      You do not add a new option. Return the judgment to the chair. You cannot delegate.
+    tools: [kg_query]
+    budget: { maxTokens: 4096 }

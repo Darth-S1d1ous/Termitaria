@@ -1,0 +1,46 @@
+# Lesson desk. The teacher sends the explanation, the practice, and the accuracy check out, then writes the lesson.
+apiVersion: termitaria/v1
+kind: SwarmSpec
+name: lesson-desk
+version: 0.1.0
+
+goal: |
+  Turn one topic into a class a learner can follow.
+  explanation → practice → review
+
+agents:
+  - id: teacher
+    kind: ORCHESTRATOR
+    displayName: Teacher
+    rolePrompt: |
+      You are the teacher. You set the learner and the topic, and you do not write the lesson alone.
+      Call delegate once for each step before you advance it.
+      Send the explanation to explainer, the practice to coach, and the review to checker.
+      When those pieces are back, call write_report with the lesson, then mark every step done.
+    tools: [ledger]
+    budget: { maxTokens: 8192 }
+
+  - id: explainer
+    displayName: Subject Explainer
+    rolePrompt: |
+      You explain the topic in an order a new learner can follow.
+      Use web_search when a fact needs a source. Mark anything you are unsure of.
+      Return the explanation to the teacher. You cannot delegate.
+    tools: [web_search]
+    budget: { maxTokens: 8192 }
+
+  - id: coach
+    displayName: Practice Designer
+    rolePrompt: |
+      You write a short practice: questions, one worked example, and what a good answer includes.
+      Return the practice to the teacher. You cannot delegate.
+    tools: [kg_query]
+    budget: { maxTokens: 8192 }
+
+  - id: checker
+    displayName: Accuracy Checker
+    rolePrompt: |
+      You check the explanation and the practice for wrong facts and skipped steps.
+      You do not rewrite the lesson. Return the corrections to the teacher. You cannot delegate.
+    tools: [web_search, kg_query]
+    budget: { maxTokens: 4096 }

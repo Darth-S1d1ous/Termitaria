@@ -97,3 +97,46 @@ func TestLoadExample(t *testing.T) {
 		t.Fatalf("brief = %+v", desk)
 	}
 }
+
+func TestLoadSwarmDir(t *testing.T) {
+	specs, err := LoadDir("../../examples/swarms")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{
+		"autoresearch": false, "copper-desk": false,
+		"product-studio": false, "story-room": false,
+		"lesson-desk": false, "decision-room": false,
+	}
+	seen := map[string]bool{}
+	for _, spec := range specs {
+		if _, ok := want[spec.Name]; !ok {
+			t.Fatalf("unexpected spec %s", spec.Name)
+		}
+		want[spec.Name] = true
+		leads := 0
+		for _, agent := range spec.Agents {
+			if seen[agent.ID] {
+				t.Fatalf("agent id %s is used in more than one template", agent.ID)
+			}
+			seen[agent.ID] = true
+			if agent.Kind == "ORCHESTRATOR" {
+				leads++
+			}
+		}
+		if leads != 1 {
+			t.Fatalf("%s leads = %d", spec.Name, leads)
+		}
+		if spec.Name == "autoresearch" || spec.Name == "copper-desk" {
+			continue
+		}
+		if got := CompileDeliverable(spec.Deliverable, spec.Goal); got != nil {
+			t.Fatalf("%s deliverable = %+v", spec.Name, got)
+		}
+	}
+	for name, found := range want {
+		if !found {
+			t.Fatalf("missing spec %s", name)
+		}
+	}
+}

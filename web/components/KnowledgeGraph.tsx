@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   loadProjectGraph,
   uploadProjectKnowledge,
@@ -8,6 +8,20 @@ import {
   type ProjectGraphEdge,
   type ProjectGraphNode,
 } from "../lib/api";
+import {
+  ZOOM_MAX,
+  ZOOM_MIN,
+  alwaysLabeled,
+  edgePath,
+  frameView,
+  graphSignature,
+  labelWidth,
+  layoutNetwork,
+  pairKey,
+  shortLabel,
+  type Point,
+  type View,
+} from "../lib/graphLayout";
 import { ProjectPaneSwitch, type ProjectPane } from "./ProjectPaneSwitch";
 
 const KIND_COLOR: Record<string, string> = {
@@ -19,14 +33,17 @@ const KIND_COLOR: Record<string, string> = {
 
 const KINDS = ["CONCEPT", "DOCUMENT", "PAPER", "CLAIM"] as const;
 const TEXT_FILE = /\.(txt|md|markdown|csv|json|tsv|log|yaml|yml|html|xml|tex)$/i;
-
-type Point = { x: number; y: number };
-type View = { x: number; y: number; k: number };
+const LABEL_ZOOM = 1;
 
 function linkPhrase(direction: "out" | "in", edge: ProjectGraphEdge) {
   if (direction === "in" && edge.relation === "CITES") return "cited by";
   if (direction === "in" && edge.relation === "DERIVES_FROM") return "derived claim";
   return (edge.relation || "link").toLowerCase().replace(/_/g, " ");
+}
+
+function relationLabel(relation: string) {
+  const text = (relation || "link").toLowerCase().replace(/_/g, " ");
+  return text.length > 18 ? `${text.slice(0, 17)}…` : text;
 }
 
 function neighborsOf(nodeId: string, nodes: ProjectGraphNode[], edges: ProjectGraphEdge[]) {
@@ -44,113 +61,21 @@ function neighborsOf(nodeId: string, nodes: ProjectGraphNode[], edges: ProjectGr
   return out;
 }
 
-function collideRadius(node: ProjectGraphNode) {
-  return 70 + Math.min(28, shortLabel(node).length * 0.35);
-}
-
-function layoutNetwork(nodes: ProjectGraphNode[], edges: ProjectGraphEdge[]) {
-  const pos = new Map<string, Point>();
-  const degree = new Map<string, number>();
-  const items = [...nodes].sort((a, b) => a.id.localeCompare(b.id));
-  for (const node of items) degree.set(node.id, 0);
-  const links = edges
-    .filter((edge) => degree.has(edge.source) && degree.has(edge.target) && edge.source !== edge.target)
-    .sort((a, b) => a.id.localeCompare(b.id));
-  for (const edge of links) {
-    degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
-    degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1);
-  }
-  const count = items.length;
-  items.forEach((node, index) => {
-    const angle = (Math.PI * 2 * index) / Math.max(count, 1) - Math.PI / 2;
-    const ring = 36 + Math.sqrt(count) * 28;
-    pos.set(node.id, { x: ring * Math.cos(angle), y: ring * Math.sin(angle) });
-  });
-  const iterations = Math.min(240, 90 + count * 2);
-  for (let step = 0; step < iterations; step++) {
-    const cool = 1 - step / iterations;
-    const disp = new Map<string, Point>();
-    for (const node of items) disp.set(node.id, { x: 0, y: 0 });
-    for (let i = 0; i < items.length; i++) {
-      for (let j = i + 1; j < items.length; j++) {
-        const a = items[i].id;
-        const b = items[j].id;
-        const pa = pos.get(a)!;
-        const pb = pos.get(b)!;
-        let dx = pa.x - pb.x;
-        let dy = pa.y - pb.y;
-        let dist = Math.hypot(dx, dy) || 0.01;
-        const min = (collideRadius(items[i]) + collideRadius(items[j])) * 0.46;
-        dx /= dist;
-        dy /= dist;
-        const push = (min * min) / (dist * dist) * 14 + (dist < min ? (min - dist) * 0.65 : 0);
-        disp.get(a)!.x += dx * push;
-        disp.get(a)!.y += dy * push;
-        disp.get(b)!.x -= dx * push;
-        disp.get(b)!.y -= dy * push;
-      }
-    }
-    for (const edge of links) {
-      const pa = pos.get(edge.source)!;
-      const pb = pos.get(edge.target)!;
-      const dx = pb.x - pa.x;
-      const dy = pb.y - pa.y;
-      const dist = Math.hypot(dx, dy) || 0.01;
-      const pull = (dist - 112) * 0.08;
-      disp.get(edge.source)!.x += (dx / dist) * pull;
-      disp.get(edge.source)!.y += (dy / dist) * pull;
-      disp.get(edge.target)!.x -= (dx / dist) * pull;
-      disp.get(edge.target)!.y -= (dy / dist) * pull;
-    }
-    const limit = 28 * cool + 2;
-    for (const node of items) {
-      const point = pos.get(node.id)!;
-      const delta = disp.get(node.id)!;
-      delta.x -= point.x * 0.02;
-      delta.y -= point.y * 0.02;
-      const mag = Math.hypot(delta.x, delta.y) || 1;
-      const stepLen = Math.min(mag, limit);
-      point.x += (delta.x / mag) * stepLen;
-      point.y += (delta.y / mag) * stepLen;
-    }
-  }
-  return { pos, degree };
-}
-
 function nodeRadius(degree: number, selected: boolean) {
   const base = 12 + Math.min(14, degree * 1.7);
   return selected ? base + 6 : base;
 }
 
-function endPoint(from: Point, to: Point, pad: number) {
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
-  const dist = Math.hypot(dx, dy) || 1;
-  const span = Math.max(dist - pad, 0) / dist;
-  return { x: from.x + dx * span, y: from.y + dy * span };
+function showNodeLabel(node: ProjectGraphNode, on: boolean, near: boolean, match: boolean, hover: boolean, k: number) {
+  if (alwaysLabeled(node.kind)) return true;
+  if (on || near || match || hover) return true;
+  return k >= LABEL_ZOOM;
 }
 
-function shortLabel(node: ProjectGraphNode) {
-  const raw = (node.title || node.id).replace(/\s+/g, " ").trim();
-  return raw.length > 24 ? `${raw.slice(0, 23)}…` : raw;
-}
-
-function bounds(pos: Map<string, Point>, nodes: ProjectGraphNode[]) {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const node of nodes) {
-    const at = pos.get(node.id);
-    if (!at) continue;
-    const half = shortLabel(node).length * 3.6 + 16;
-    minX = Math.min(minX, at.x - half);
-    maxX = Math.max(maxX, at.x + half);
-    minY = Math.min(minY, at.y - 32);
-    maxY = Math.max(maxY, at.y + 48);
-  }
-  if (!Number.isFinite(minX)) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
-  return { minX, minY, maxX, maxY };
+function matchCount(count: number) {
+  if (count === 0) return "No matches";
+  if (count === 1) return "1 match";
+  return `${count} matches`;
 }
 
 function describe(graph: ProjectGraph | null, status: string) {
@@ -171,6 +96,7 @@ export function KnowledgeGraph({
   const [graph, setGraph] = useState<ProjectGraph | null>(null);
   const [status, setStatus] = useState("Loading the knowledge graph.");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [hoverId, setHoverId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [uploadNote, setUploadNote] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -178,13 +104,22 @@ export function KnowledgeGraph({
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
   const stageRef = useRef<HTMLDivElement>(null);
+  const worldRef = useRef<SVGGElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const framed = useRef(false);
-  const framedRev = useRef(0);
+  const positionsRef = useRef<Map<string, Point>>(new Map());
+  const didFit = useRef(false);
+  const userMoved = useRef(false);
+  const projectSeen = useRef(projectId);
   const focusedQuery = useRef("");
   const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
   const viewRef = useRef(view);
-  viewRef.current = view;
+
+  if (projectSeen.current !== projectId) {
+    projectSeen.current = projectId;
+    positionsRef.current = new Map();
+    didFit.current = false;
+    userMoved.current = false;
+  }
 
   useEffect(() => {
     if (!projectId) {
@@ -218,7 +153,14 @@ export function KnowledgeGraph({
 
   const nodes = graph?.nodes ?? [];
   const edges = graph?.edges ?? [];
-  const placed = useMemo(() => layoutNetwork(nodes, edges), [nodes, edges]);
+  const graphRef = useRef({ nodes, edges });
+  graphRef.current = { nodes, edges };
+  const signature = useMemo(() => graphSignature(nodes, edges), [nodes, edges]);
+  const placed = useMemo(
+    () => layoutNetwork(graphRef.current.nodes, graphRef.current.edges, positionsRef.current),
+    [signature],
+  );
+  positionsRef.current = placed.pos;
   const pos = placed.pos;
   const degree = placed.degree;
   const selected = nodes.find((node) => node.id === selectedId) ?? null;
@@ -229,18 +171,44 @@ export function KnowledgeGraph({
     ? nodes.filter((node) => `${node.title} ${node.text}`.toLowerCase().includes(needle))
     : [];
   const hitIds = new Set(hits.map((node) => node.id));
+  const listedHits = hits.slice(0, 8);
+
+  function paintTransform(next: View) {
+    viewRef.current = next;
+    worldRef.current?.setAttribute("transform", `translate(${next.x} ${next.y}) scale(${next.k})`);
+  }
+
+  function commitView(next: View) {
+    paintTransform(next);
+    setView(next);
+  }
+
+  function noteUserMove() {
+    if (didFit.current) userMoved.current = true;
+  }
 
   function canvasRect() {
     return stageRef.current?.querySelector("svg")?.getBoundingClientRect();
   }
 
-  function focusAt(id: string, scale = 1) {
+  function focusAt(id: string, scale = viewRef.current.k) {
     const at = pos.get(id);
     const rect = canvasRect();
     if (!at || !rect) return;
     setSelectedId(id);
-    setView({ k: scale, x: rect.width / 2 - at.x * scale, y: rect.height / 2 - at.y * scale });
+    noteUserMove();
+    commitView({ k: scale, x: rect.width / 2 - at.x * scale, y: rect.height / 2 - at.y * scale });
   }
+
+  function fitView() {
+    const rect = canvasRect();
+    if (!rect || nodes.length === 0) return;
+    commitView(frameView(pos, nodes, rect.width, rect.height));
+  }
+
+  useLayoutEffect(() => {
+    worldRef.current?.setAttribute("transform", `translate(${viewRef.current.x} ${viewRef.current.y}) scale(${viewRef.current.k})`);
+  });
 
   useEffect(() => {
     const el = stageRef.current;
@@ -259,21 +227,11 @@ export function KnowledgeGraph({
   }, []);
 
   useEffect(() => {
-    const el = stageRef.current;
-    if (!el || nodes.length === 0) return;
-    if (framed.current && framedRev.current === 4) return;
+    if (didFit.current || userMoved.current || nodes.length === 0) return;
     const rect = canvasRect();
-    if (!rect) return;
-    if (rect.width < 40 || rect.height < 40) return;
-    const box = bounds(pos, nodes);
-    const w = box.maxX - box.minX;
-    const h = box.maxY - box.minY;
-    const cx = (box.minX + box.maxX) / 2;
-    const cy = (box.minY + box.maxY) / 2;
-    const k = Math.min(1.35, (rect.width - 72) / w, (rect.height - 72) / h);
-    setView({ k, x: rect.width / 2 - cx * k, y: rect.height / 2 - cy * k });
-    framed.current = true;
-    framedRev.current = 4;
+    if (!rect || rect.width < 40 || rect.height < 40) return;
+    commitView(frameView(pos, nodes, rect.width, rect.height));
+    didFit.current = true;
   }, [nodes, pos, size]);
 
   useEffect(() => {
@@ -298,40 +256,48 @@ export function KnowledgeGraph({
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
+    let timer = 0;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
+      noteUserMove();
       const current = viewRef.current;
       const next = event.deltaY > 0 ? current.k * 0.9 : current.k * 1.1;
-      const k = Math.min(2.6, Math.max(0.35, next));
+      const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
       const rect = el.querySelector("svg")?.getBoundingClientRect() ?? el.getBoundingClientRect();
       const px = event.clientX - rect.left;
       const py = event.clientY - rect.top;
       const wx = (px - current.x) / current.k;
       const wy = (py - current.y) / current.k;
-      setView({ k, x: px - wx * k, y: py - wy * k });
+      paintTransform({ k, x: px - wx * k, y: py - wy * k });
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setView({ ...viewRef.current }), 80);
     };
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    return () => {
+      window.clearTimeout(timer);
+      el.removeEventListener("wheel", onWheel);
+    };
   }, []);
 
   function zoomBy(factor: number) {
     const rect = canvasRect();
     const current = viewRef.current;
-    const k = Math.min(2.6, Math.max(0.35, current.k * factor));
+    const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, current.k * factor));
+    noteUserMove();
     if (!rect) {
-      setView({ ...current, k });
+      commitView({ ...current, k });
       return;
     }
     const px = rect.width / 2;
     const py = rect.height / 2;
     const wx = (px - current.x) / current.k;
     const wy = (py - current.y) / current.k;
-    setView({ k, x: px - wx * k, y: py - wy * k });
+    commitView({ k, x: px - wx * k, y: py - wy * k });
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     const target = event.target as Element;
-    if (target.closest(".kg-node") || target.closest(".kg-float") || target.closest(".kg-search")) return;
+    if (target.closest(".kg-node") || target.closest(".kg-float") || target.closest(".kg-search-wrap")) return;
     drag.current = { x: event.clientX, y: event.clientY, vx: viewRef.current.x, vy: viewRef.current.y };
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -339,11 +305,18 @@ export function KnowledgeGraph({
   function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
     const start = drag.current;
     if (!start) return;
-    setView({
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 3) noteUserMove();
+    paintTransform({
       k: viewRef.current.k,
       x: start.vx + event.clientX - start.x,
       y: start.vy + event.clientY - start.y,
     });
+  }
+
+  function onPointerUp() {
+    if (!drag.current) return;
+    drag.current = null;
+    setView({ ...viewRef.current });
   }
 
   async function onFile(file: File | undefined) {
@@ -377,6 +350,15 @@ export function KnowledgeGraph({
   const width = size.w;
   const height = size.h;
   const paint = [...nodes].sort((a, b) => Number(a.id === selectedId) - Number(b.id === selectedId));
+  const pairCounts = new Map<string, number>();
+  for (const edge of edges) {
+    const key = pairKey(edge.source, edge.target);
+    pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1);
+  }
+  const pairSeen = new Map<string, number>();
+  const hotCount = selected ? edges.filter((edge) => edge.source === selected.id || edge.target === selected.id).length : 0;
+  const rawText = selected?.text?.trim() ?? "";
+  const bodyText = rawText && rawText !== (selected?.title || "").trim() ? selected?.text ?? "" : "";
 
   return (
     <section className="kg" aria-label="Knowledge graph">
@@ -402,9 +384,8 @@ export function KnowledgeGraph({
           ref={stageRef}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
-          onPointerUp={() => {
-            drag.current = null;
-          }}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
         >
           <svg className={selected ? "picked" : ""} viewBox={`0 0 ${width} ${height}`} role="group" aria-label="Project knowledge graph">
             <defs>
@@ -412,25 +393,38 @@ export function KnowledgeGraph({
                 <path d="M0 0 L4.8 2.4 L0 4.8 z" fill="#8aa4b8" />
               </marker>
             </defs>
-            <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
+            <g ref={worldRef} transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
               {edges.map((edge) => {
                 const a = pos.get(edge.source);
                 const b = pos.get(edge.target);
-                if (!a || !b) return null;
+                if (!a || !b || edge.source === edge.target) return null;
+                const key = pairKey(edge.source, edge.target);
+                const count = pairCounts.get(key) ?? 1;
+                const index = pairSeen.get(key) ?? 0;
+                pairSeen.set(key, index + 1);
                 const hot = Boolean(selected && (edge.source === selected.id || edge.target === selected.id));
                 const tone = edge.relation && edge.relation !== "CITES" && edge.relation !== "DERIVES_FROM" ? " named" : "";
-                const start = endPoint(a, b, nodeRadius(degree.get(edge.source) ?? 0, selected?.id === edge.source));
-                const end = endPoint(b, a, nodeRadius(degree.get(edge.target) ?? 0, selected?.id === edge.target));
+                const curve = edgePath(
+                  a,
+                  b,
+                  nodeRadius(degree.get(edge.source) ?? 0, selected?.id === edge.source),
+                  nodeRadius(degree.get(edge.target) ?? 0, selected?.id === edge.target),
+                  (index - (count - 1) / 2) * 36,
+                );
+                const phrase = relationLabel(edge.relation);
+                const phraseWidth = phrase.length * 5.6 + 10;
                 return (
-                  <line
-                    key={edge.id}
-                    x1={start.x}
-                    y1={start.y}
-                    x2={end.x}
-                    y2={end.y}
-                    className={`kg-edge${tone}${hot ? " hot" : ""}`}
-                    markerEnd="url(#kg-arrow)"
-                  />
+                  <g key={edge.id}>
+                    <path d={curve.d} className={`kg-edge${tone}${hot ? " hot" : ""}`} markerEnd="url(#kg-arrow)" />
+                    {hot && hotCount <= 8 ? (
+                      <g className="kg-edge-label" transform={`translate(${curve.labelAt.x} ${curve.labelAt.y})`}>
+                        <rect x={-phraseWidth / 2} y={-8} width={phraseWidth} height={16} rx={4} />
+                        <text textAnchor="middle" dominantBaseline="middle">
+                          {phrase}
+                        </text>
+                      </g>
+                    ) : null}
+                  </g>
                 );
               })}
               {paint.map((node) => {
@@ -438,11 +432,13 @@ export function KnowledgeGraph({
                 if (!at) return null;
                 const on = selected?.id === node.id;
                 const near = neighborIds.has(node.id);
-                const match = needle && hitIds.has(node.id);
-                const dim = needle && !match;
+                const match = Boolean(needle && hitIds.has(node.id));
+                const hover = hoverId === node.id;
+                const dim = Boolean(needle && !match);
                 const radius = nodeRadius(degree.get(node.id) ?? 0, on);
+                const visible = showNodeLabel(node, on, near, match, hover, view.k);
                 const label = shortLabel(node);
-                const textWidth = label.length * 6.3 + 14;
+                const textWidth = labelWidth(node);
                 const ly = radius + 14;
                 return (
                   <g
@@ -453,34 +449,59 @@ export function KnowledgeGraph({
                     tabIndex={0}
                     aria-label={`${node.kind} ${node.title}`}
                     onClick={() => setSelectedId(node.id)}
+                    onPointerEnter={() => setHoverId(node.id)}
+                    onPointerLeave={() => setHoverId((current) => (current === node.id ? null : current))}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") setSelectedId(node.id);
                     }}
                   >
                     <circle r={radius} fill={KIND_COLOR[node.kind] ?? "#8b7ec8"} />
                     <title>{node.title || node.id}</title>
-                    <rect className="kg-label-bg" x={-textWidth / 2} y={ly - 9} width={textWidth} height={18} rx={4} />
-                    <text textAnchor="middle" dominantBaseline="middle" y={ly} className="kg-label">
-                      {label}
-                    </text>
+                    {visible ? (
+                      <>
+                        <rect className="kg-label-bg" x={-textWidth / 2} y={ly - 9} width={textWidth} height={18} rx={4} />
+                        <text textAnchor="middle" dominantBaseline="middle" y={ly} className="kg-label">
+                          {label}
+                        </text>
+                      </>
+                    ) : null}
                   </g>
                 );
               })}
             </g>
           </svg>
-          <input
-            className="kg-search"
-            aria-label="Search nodes"
-            placeholder="Search nodes"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
+          <div className="kg-search-wrap">
+            <input
+              className="kg-search"
+              aria-label="Search nodes"
+              placeholder="Search nodes"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            {needle ? (
+              <div className="kg-matches">
+                <p>{matchCount(hits.length)}</p>
+                <ul>
+                  {listedHits.map((node) => (
+                    <li key={node.id}>
+                      <button type="button" onClick={() => focusAt(node.id, viewRef.current.k)}>
+                        {node.title || node.id}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
           <div className="kg-float">
             <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.15)}>
               <BarIcon d="M12 5v14M6 12h12" />
             </button>
             <button type="button" aria-label="Zoom out" onClick={() => zoomBy(0.87)}>
               <BarIcon d="M6 12h12" />
+            </button>
+            <button type="button" className="kg-fit" aria-label="Fit graph" onClick={fitView}>
+              Fit
             </button>
             <button type="button" aria-label="Upload file" disabled={uploading} onClick={() => fileRef.current?.click()}>
               <BarIcon d="M12 16V5M8 8.5 12 4.5 16 8.5M5 19h14" />
@@ -504,7 +525,6 @@ export function KnowledgeGraph({
             <>
               <span className="kg-kind">{selected.kind}</span>
               <h2>{selected.title || selected.id}</h2>
-              {selected.text && selected.text.length > selected.title.length ? <p className="body">{selected.text}</p> : null}
               <h3>Links</h3>
               {neighbors.length === 0 ? <p className="slot-hint">No links</p> : null}
               <ul>
@@ -520,6 +540,11 @@ export function KnowledgeGraph({
                   </li>
                 ))}
               </ul>
+              {bodyText ? (
+                <div className="kg-text">
+                  <p className="body">{bodyText}</p>
+                </div>
+              ) : null}
             </>
           ) : (
             <p className="slot-hint">Select a node to read its text and links. Upload a file to add it to this graph.</p>

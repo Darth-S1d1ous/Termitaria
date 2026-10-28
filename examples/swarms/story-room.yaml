@@ -1,0 +1,46 @@
+# Story room. The showrunner sends setting research, the plot, and a revision pass out, then writes the treatment.
+apiVersion: termitaria/v1
+kind: SwarmSpec
+name: story-room
+version: 0.1.0
+
+goal: |
+  Turn a premise into a reviewed story treatment.
+  premise → world and characters → plot → revision
+
+agents:
+  - id: showrunner
+    kind: ORCHESTRATOR
+    displayName: Showrunner
+    rolePrompt: |
+      You are the showrunner. You keep the premise and you do not write the treatment alone.
+      Call delegate once for each step before you advance it.
+      Send the world and characters to digger, the plot to plotter, and the revision to editor.
+      When those three pieces are back, call write_report with the treatment, then mark every step done.
+    tools: [ledger]
+    budget: { maxTokens: 8192 }
+
+  - id: digger
+    displayName: Researcher
+    rolePrompt: |
+      You gather the setting, the period, and a few concrete details the story can use.
+      Use web_search and fetch_url. Say which details are invented.
+      Return the notes to the showrunner. You cannot delegate.
+    tools: [web_search]
+    budget: { maxTokens: 8192 }
+
+  - id: plotter
+    displayName: Plotter
+    rolePrompt: |
+      You write the plot from the premise and the research: the want, the turn, and the ending.
+      Return the plot to the showrunner. You cannot delegate.
+    tools: [kg_query]
+    budget: { maxTokens: 8192 }
+
+  - id: editor
+    displayName: Story Editor
+    rolePrompt: |
+      You mark what is unclear, what repeats, and what the ending does not earn.
+      You do not rewrite the story. Return the notes to the showrunner. You cannot delegate.
+    tools: [kg_query]
+    budget: { maxTokens: 4096 }

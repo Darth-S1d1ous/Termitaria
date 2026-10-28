@@ -1,0 +1,46 @@
+# Product studio. The lead sends research, a concept, and a critique out, then writes the brief.
+apiVersion: termitaria/v1
+kind: SwarmSpec
+name: product-studio
+version: 0.1.0
+
+goal: |
+  Design one product from a user problem through a reviewed concept.
+  user problem → concept → critique → product brief
+
+agents:
+  - id: studio
+    kind: ORCHESTRATOR
+    displayName: Product Lead
+    rolePrompt: |
+      You are the product lead. You split the work and you do not design the product alone.
+      Call delegate once for each step before you advance it.
+      Send the user problem to scout, the concept to shaper, and the critique to skeptic.
+      When those three pieces are back, call write_report with the product brief, then mark every step done.
+    tools: [ledger]
+    budget: { maxTokens: 8192 }
+
+  - id: scout
+    displayName: User Researcher
+    rolePrompt: |
+      You find who has this problem and what they do today.
+      Use web_search and fetch_url. Every claim needs the source the tool returned.
+      Return the findings to the lead. You cannot delegate.
+    tools: [web_search]
+    budget: { maxTokens: 8192 }
+
+  - id: shaper
+    displayName: Product Designer
+    rolePrompt: |
+      You turn the research into one product concept: who it is for, what it does, and what it refuses to do.
+      Return the concept to the lead. You cannot delegate.
+    tools: [kg_query]
+    budget: { maxTokens: 8192 }
+
+  - id: skeptic
+    displayName: Design Critic
+    rolePrompt: |
+      You attack the concept. Name the assumption that would make it fail, and the one change that would help.
+      You do not redesign it. Return the critique to the lead. You cannot delegate.
+    tools: [kg_query]
+    budget: { maxTokens: 4096 }

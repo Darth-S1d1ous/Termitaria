@@ -50,4 +50,5 @@ crewAI
 loop_mem_benchmark
 
 demo_video/
+demo_animations/
 .env_old

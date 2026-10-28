@@ -323,7 +323,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 }
 
 .pip.online { background: #3d9a4a; }
-.pip.thinking { background: #e5ca77; }
+.pip.thinking { background: var(--danger); }
 .pip.offline { background: #98a2ab; }
 
 .chat-main { min-width: 0; flex: 1; padding: 2px 0; }
@@ -457,14 +457,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 .msg.user .bubble time { color: #5eaa5a; }
 
-.thinking {
+.bubble.thinking {
   display: flex;
   gap: 4px;
   padding: 12px 14px;
   width: fit-content;
 }
 
-.thinking i {
+.bubble.thinking i {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -472,8 +472,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   animation: blink 1.2s infinite;
 }
 
-.thinking i:nth-child(2) { animation-delay: 0.15s; }
-.thinking i:nth-child(3) { animation-delay: 0.3s; }
+.bubble.thinking i:nth-child(2) { animation-delay: 0.15s; }
+.bubble.thinking i:nth-child(3) { animation-delay: 0.3s; }
 
 @keyframes blink {
   0%, 80%, 100% { opacity: 0.3; }
@@ -507,15 +507,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   flex: none;
   align-self: flex-end;
   height: 42px;
-  max-width: 190px;
+  max-width: 210px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: var(--hover);
+  background-color: var(--hover);
   color: var(--ink);
-  padding: 0 10px;
+  padding: 0 36px 0 14px;
   font: inherit;
   font-size: 13px;
   cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6.5 8 10.5 12 6.5' fill='none' stroke='%23707579' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 14px 14px;
 }
 
 .model-select:disabled { color: var(--faint); cursor: default; }
@@ -1081,12 +1086,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   touch-action: none;
 }
 
-.kg-search {
+.kg-search-wrap {
   position: absolute;
   top: 12px;
   left: 12px;
   z-index: 5;
-  width: 180px;
+  width: 220px;
+}
+
+.kg-search {
+  width: 100%;
   height: 34px;
   border: 1px solid var(--line);
   border-radius: 17px;
@@ -1094,6 +1103,46 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   padding: 0 12px;
   box-shadow: 0 4px 14px rgba(16, 35, 47, 0.1);
 }
+
+.kg-matches {
+  margin-top: 6px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(16, 35, 47, 0.1);
+}
+
+.kg-matches p {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.kg-matches ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kg-matches button {
+  width: 100%;
+  margin: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+}
+
+.kg-matches button:hover { background: var(--hover); }
 
 .kg-float {
   position: absolute;
@@ -1130,6 +1179,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   display: block;
 }
 
+.kg-float button.kg-fit {
+  width: auto;
+  flex-basis: auto;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .kg-float button:hover { background: var(--hover); }
 
 .kg-float button:disabled { opacity: 0.45; cursor: default; }
@@ -1138,9 +1196,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 .text-btn:disabled { opacity: 0.5; cursor: default; }
 
-.kg-edge { stroke: #c5d0d8; stroke-width: 2; }
+.kg-edge { stroke: #c5d0d8; stroke-width: 2; fill: none; pointer-events: none; }
 .kg-edge.named { stroke: #3390ec; }
-.kg-edge.hot { stroke-width: 3; }
+.kg-edge.hot { stroke-width: 2.6; }
+.kg-body svg.picked .kg-edge { opacity: 0.12; }
+.kg-body svg.picked .kg-edge.hot { opacity: 1; }
+
+.kg-edge-label { pointer-events: none; }
+.kg-edge-label rect { fill: #fff; stroke: #d5dee6; }
+.kg-edge-label text { fill: #243038; font-size: 10px; font-weight: 600; }
 
 .kg-legend {
   display: flex;
@@ -1166,7 +1230,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   color: var(--muted);
 }
 
-.kg-detail .body { white-space: pre-wrap; margin-top: 8px; }
+.kg-detail .kg-text {
+  max-height: 180px;
+  overflow: auto;
+  margin-top: 16px;
+}
+
+.kg-detail .body { white-space: pre-wrap; margin: 0; }
 
 .kg-agent {
   display: flex;
