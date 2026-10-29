@@ -19,12 +19,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .calls import Call, extract_tool_call
 from .deck import build_pptx
 from .mcp import MCPTool, call_mcp
+from .search import SearchError, build_search
 from .skills import Skill
 
 Runner = Callable[[dict], Awaitable[str]]
@@ -291,9 +291,22 @@ def make_toolbox(
     if "web_search" in names:
         tools.append(Tool(
             "web_search",
-            "Search the web for query. Return titles, links, and a short snippet.",
+            "Search the web for query. freshness limits results to day, week, or month. "
+            "topic=news focuses on news. Return titles, links, and a short snippet.",
             _web_search,
-            {"query": {"type": "string", "description": "search query"}},
+            {
+                "query": {"type": "string", "description": "search query"},
+                "freshness": {
+                    "type": "string",
+                    "enum": ["day", "week", "month"],
+                    "description": "optional recency filter",
+                },
+                "topic": {
+                    "type": "string",
+                    "enum": ["general", "news"],
+                    "description": "optional result type",
+                },
+            },
             ["query"],
         ))
     if "fetch_url" in names:
@@ -645,10 +658,19 @@ async def _kg_write(client, project_id: str, args: dict) -> str:
 
 async def _web_search(args: dict) -> str:
     query = str(args.get("query") or args.get("q") or "").strip()
-    log.info("tool web_search query=%s", query[:160])
+    freshness = str(args.get("freshness") or "").strip().lower()
+    topic = str(args.get("topic") or "").strip().lower()
+    log.info(
+        "tool web_search query=%s freshness=%s topic=%s",
+        query[:160], freshness, topic,
+    )
     if not query:
         return "web_search requires query"
-    return await asyncio.to_thread(_search_blocking, query)
+    if freshness and freshness not in {"day", "week", "month"}:
+        return "web_search freshness must be day, week, or month"
+    if topic and topic not in {"general", "news"}:
+        return "web_search topic must be general or news"
+    return await asyncio.to_thread(_search_blocking, query, freshness, topic)
 
 
 async def _utc_time(args: dict) -> str:
@@ -792,55 +814,27 @@ def _read_blocking(path: str, project_id: str = "", seeds: list | None = None) -
     return text
 
 
-def _search_key() -> str:
-    key = os.environ.get("SEARCH_API_KEY") or os.environ.get("BRAVE_API_KEY") or ""
-    if key:
-        return key
-    from .config import _secret
-
-    return _secret("brave-secrets", "SEARCH_API_KEY")
+_SEARCH_SNIPPET_CHARS = 400
 
 
-def _search_blocking(query: str) -> str:
-    key = _search_key()
-    if not key:
-        return "web_search failed: SEARCH_API_KEY is not set"
-    url = "https://api.search.brave.com/res/v1/web/search?" + urlencode({"q": query, "count": "5"})
-    req = Request(
-        url,
-        headers={
-            "Accept": "application/json",
-            "X-Subscription-Token": key,
-            "User-Agent": "Termitaria/0.1",
-        },
-    )
+def _search_blocking(query: str, freshness: str = "", topic: str = "") -> str:
     try:
-        with urlopen(req, timeout=20) as res:
-            status = res.status
-            raw = res.read(500_000)
-    except HTTPError as exc:
-        detail = exc.read(300).decode("utf-8", "replace")
-        return f"web_search failed: HTTP {exc.code} {detail}".strip()
-    except (URLError, TimeoutError, OSError) as exc:
+        adapter = build_search()
+    except SearchError as exc:
         return f"web_search failed: {exc}"
-    if status != 200:
-        return f"web_search failed: HTTP {status}"
+    log.info("web_search provider=%s", adapter.name)
     try:
-        data = json.loads(raw.decode("utf-8", "replace"))
-    except json.JSONDecodeError:
-        return "web_search failed: Brave did not return JSON"
-    hits = []
-    for item in (data.get("web") or {}).get("results") or []:
-        title = str(item.get("title") or "").strip()
-        link = str(item.get("url") or "").strip()
-        snippet = str(item.get("description") or "").strip()
-        if title and link:
-            hits.append((title, link, snippet))
+        hits = adapter.search(query, limit=5, freshness=freshness, topic=topic)
+    except SearchError as exc:
+        return f"web_search failed: {exc}"
     if not hits:
-        return "web_search failed: Brave returned no results"
-    lines = [f"Source Brave, {len(hits[:5])} hits. Open a page with fetch_url."]
-    for title, link, snippet in hits[:5]:
-        lines.append(f"- {title}\n  {link}\n  {snippet}".rstrip())
+        return f"web_search failed: {adapter.name} returned no results"
+    lines = [f"Source {adapter.name}, {len(hits)} hits. Open a page with fetch_url."]
+    for hit in hits:
+        snippet = hit.snippet
+        if len(snippet) > _SEARCH_SNIPPET_CHARS:
+            snippet = snippet[:_SEARCH_SNIPPET_CHARS].rstrip() + "…"
+        lines.append(f"- {hit.title}\n  {hit.url}\n  {snippet}".rstrip())
     return "\n".join(lines)
 
 

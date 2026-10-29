@@ -236,10 +236,18 @@ def test_closing_round_runs_text_calls_then_asks_for_prose(tmp_path, monkeypatch
 
 
 def test_search_reports_missing_key(monkeypatch):
-    monkeypatch.setattr("services.worker.tools._search_key", lambda: "")
+    from services.worker.search import SearchError
+
+    def missing():
+        raise SearchError("set TAVILY_API_KEY or SEARCH_API_KEY")
+
+    monkeypatch.setattr("services.worker.tools.build_search", missing)
     from services.worker.tools import _search_blocking
 
-    assert "SEARCH_API_KEY" in _search_blocking("copper")
+    message = _search_blocking("copper")
+    assert "web_search failed:" in message
+    assert "TAVILY_API_KEY" in message
+    assert "SEARCH_API_KEY" in message
 
 
 def test_filings_skill_adds_edgar():

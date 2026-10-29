@@ -120,8 +120,10 @@ NEBIUS_BASE_URL=https://api.tokenfactory.us-central1.nebius.com/v1
 MODEL_TIER_SUPER=nvidia/nemotron-3-super-120b-a12b
 
 # Optional. Copper Desk and Autoresearch call web_search.
-# SEARCH_API_KEY is a Brave Search key.
-SEARCH_API_KEY=
+# Tavily is the default provider. Brave is still supported.
+SEARCH_PROVIDER=tavily
+TAVILY_API_KEY=your-tavily-key
+# SEARCH_API_KEY=your-brave-key
 ```
 
 Leave `NVIDIA_MODEL` unset. If it is set, the control plane sends that model name instead of the Token Factory default above.
