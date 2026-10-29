@@ -24,6 +24,7 @@ var/
 
 # example and temporary files
 *.example
+!.env.example
 
 # local client state (projects and user-visible chats)
 data/

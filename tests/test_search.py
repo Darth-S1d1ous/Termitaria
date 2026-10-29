@@ -64,7 +64,6 @@ def _isolate(monkeypatch, *, provider=None, tavily="", brave=""):
         else:
             monkeypatch.delenv(key, raising=False)
     monkeypatch.delenv("SEARCH_API_KEY", raising=False)
-    monkeypatch.setattr("services.worker.search._secret", lambda *args: "")
 
 
 def test_default_is_tavily(monkeypatch):

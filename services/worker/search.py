@@ -14,8 +14,6 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from .config import _secret
-
 log = logging.getLogger(__name__)
 
 Transport = Callable[[str, str, dict[str, str], bytes | None], tuple[int, bytes]]
@@ -177,23 +175,14 @@ class BraveSearch(SearchAdapter):
 
 
 def _tavily_key() -> str:
-    key = os.environ.get("TAVILY_API_KEY", "").strip()
-    if key:
-        return key
-    return (
-        _secret("tavily-secrets", "TAVILY_API_KEY")
-        or _secret("nebius-secrets", "TAVILY_API_KEY")
-    )
+    return os.environ.get("TAVILY_API_KEY", "").strip()
 
 
 def _brave_key() -> str:
-    key = (
+    return (
         os.environ.get("BRAVE_API_KEY", "").strip()
         or os.environ.get("SEARCH_API_KEY", "").strip()
     )
-    if key:
-        return key
-    return _secret("brave-secrets", "SEARCH_API_KEY")
 
 
 def build_search() -> SearchAdapter:

@@ -100,7 +100,7 @@ Domain language: [`docs/concepts.md`](docs/concepts.md). Component map: [`docs/a
 
 ## Run it
 
-You need Docker, Go 1.26+, Python 3.11+, [uv](https://docs.astral.sh/uv/), and Node.js 20+. The dev script is bash and uses `lsof` and `curl`.
+You need Docker, Go 1.26+, Python 3.11+, [uv](https://docs.astral.sh/uv/), Node.js 20+, and [buf](https://buf.build/docs/installation). The dev script is bash and uses `make`, `lsof`, and `curl`.
 
 ```bash
 git clone https://github.com/Darth-S1d1ous/Termitaria.git
@@ -108,25 +108,42 @@ cd Termitaria
 
 uv sync --extra memory
 npm install --prefix web
+make proto
 ```
 
-Create a `.env` in the repo root. `make up` loads it.
+`make proto` generates the Go and Python bindings into `gen/`. A fresh clone does not have them. It needs network access to fetch the Buf plugins.
+
+Create `.env` from the sample:
 
 ```bash
-# Nebius Token Factory + NVIDIA Nemotron 3
-MODEL_PROVIDER=nebius-token-factory
-NEBIUS_API_KEY=your-token-factory-key
-NEBIUS_BASE_URL=https://api.tokenfactory.us-central1.nebius.com/v1
-MODEL_TIER_SUPER=nvidia/nemotron-3-super-120b-a12b
-
-# Optional. Copper Desk and Autoresearch call web_search.
-# Tavily is the default provider. Brave is still supported.
-SEARCH_PROVIDER=tavily
-TAVILY_API_KEY=your-tavily-key
-# SEARCH_API_KEY=your-brave-key
+cp .env.example .env
 ```
 
-Leave `NVIDIA_MODEL` unset. If it is set, the control plane sends that model name instead of the Token Factory default above.
+Open `.env` and set at least these two keys:
+
+```bash
+NEBIUS_API_KEY=your-token-factory-key
+TAVILY_API_KEY=your-tavily-key
+```
+
+| Variable | Required | Used by |
+| --- | --- | --- |
+| `NEBIUS_API_KEY` | Yes | Model calls and Graphiti extraction. |
+| `TAVILY_API_KEY` | Yes for Copper Desk and Autoresearch | `web_search`. |
+| `BRAVE_API_KEY` | No | Brave fallback. Set `SEARCH_PROVIDER=brave` to use it. |
+| `DEEPSEEK_API_KEY` | No | DeepSeek official API. With the default Nebius config, the DeepSeek picker entries run on Token Factory and this key is not used. |
+| `NVIDIA_API_KEY` | No | Direct NVIDIA API Catalog, shown in the model picker. Does not go through Nebius. |
+| `MEMORY_LLM_API_KEY` | No | Graphiti when it should use a key other than `NEBIUS_API_KEY`. |
+
+Keep the rest of `.env.example` as it is:
+
+- `MODEL_PROVIDER=nebius-token-factory`
+- `MODEL_CLOUD_ENABLED=1`
+- `DEFAULT_MODEL_ID=nebius-nemotron-super`
+- `SEARCH_PROVIDER=tavily`
+- Local NATS, Postgres, Qdrant, and FalkorDB addresses.
+
+All API keys come from `.env`. The app does not read `~/.secrets`.
 
 Start the stack:
 
@@ -134,12 +151,12 @@ Start the stack:
 make up
 ```
 
-`make up` starts NATS, FalkorDB, Postgres, and Qdrant, then the Go runtime, the worker, the memory service, the graph service, and the web app. When it prints the URLs, open:
+`make up` starts NATS, FalkorDB, Postgres, and Qdrant, then the Go runtime, the worker, the memory service, the graph service, and the web app. The first run pulls Docker images and downloads the local embedding model, so it can take a few minutes. When it prints the URLs, open:
 
 - App: http://127.0.0.1:3000
 - Gateway health: http://127.0.0.1:8787/api/health
 
-In the app, create a project, choose **copper-desk** or **autoresearch**, and send a message. Copper Desk is the shorter demo: ask for last week's copper move and a reviewed brief.
+In the app, create a project, choose **copper-desk** or **autoresearch**, and send a message. The model picker defaults to **Nemotron 3 Super (Nebius)**. Copper Desk is the shorter demo: ask for last week's copper move and a reviewed brief.
 
 Stop the app with Ctrl-C. That stops the processes `make up` started. The databases keep running until you stop them:
 
